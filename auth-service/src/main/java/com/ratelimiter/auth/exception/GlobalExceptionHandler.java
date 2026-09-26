@@ -1,6 +1,7 @@
 package com.ratelimiter.auth.exception;
 
 import com.ratelimiter.common.dto.ApiResponse;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.authentication.BadCredentialsException;
@@ -13,6 +14,7 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import java.util.HashMap;
 import java.util.Map;
 
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
@@ -30,8 +32,16 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(UsernameNotFoundException.class)
     public ResponseEntity<ApiResponse<Void>> handleUsernameNotFound(UsernameNotFoundException ex) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND)
-                .body(ApiResponse.error(ex.getMessage(), "USER_NOT_FOUND"));
+        // Same shape as a bad password: whether the account exists is not disclosed.
+        log.debug("Username lookup failed: {}", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.UNAUTHORIZED)
+                .body(ApiResponse.error("Invalid username or password", "INVALID_CREDENTIALS"));
+    }
+
+    /** Messages deliberately written for the caller. */
+    @ExceptionHandler(ClientVisibleException.class)
+    public ResponseEntity<ApiResponse<Void>> handleClientVisible(ClientVisibleException ex) {
+        return ResponseEntity.badRequest().body(ApiResponse.error(ex.getMessage(), "REQUEST_ERROR"));
     }
 
     @ExceptionHandler(BadCredentialsException.class)
@@ -42,12 +52,16 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(RuntimeException.class)
     public ResponseEntity<ApiResponse<Void>> handleRuntime(RuntimeException ex) {
+        // Detail stays in the log. Echoing it disclosed tenant ids, account state and
+        // whatever text an internal failure happened to carry.
+        log.warn("Unhandled runtime failure", ex);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST)
-                .body(ApiResponse.error(ex.getMessage(), "REQUEST_ERROR"));
+                .body(ApiResponse.error("Request could not be completed", "REQUEST_ERROR"));
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ApiResponse<Void>> handleGeneral(Exception ex) {
+        log.error("Unhandled exception", ex);
         return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                 .body(ApiResponse.error("An unexpected error occurred", "INTERNAL_ERROR"));
     }
