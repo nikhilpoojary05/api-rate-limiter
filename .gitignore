@@ -1,0 +1,41 @@
+# Maven build outputs
+target/
+*.jar
+*.war
+
+# IDE files
+.idea/
+*.iml
+.vscode/
+*.suo
+*.user
+
+# Logs
+*.log
+logs/
+
+# Node / Dashboard
+dashboard/node_modules/
+dashboard/dist/
+dashboard/.vite/
+
+# Environment secrets
+.env.local
+.env.production
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Docker volumes (local data)
+postgres-data/
+redis-data/
+
+# Secrets — never commit
+.env
+.env.*
+!.env.example
+
+# Build / deploy artifacts
+deploy.zip
+test-unzip/
