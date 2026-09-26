@@ -2,6 +2,7 @@ package com.ratelimiter.admin.config;
 
 import com.ratelimiter.admin.security.JwtAdminFilter;
 import lombok.RequiredArgsConstructor;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
@@ -22,15 +23,24 @@ public class SecurityConfig {
 
     private final JwtAdminFilter jwtAdminFilter;
 
+    /**
+     * Explicit origins rather than "*". A wildcard cannot be combined with credentialed
+     * requests, and it let any site on the internet call these endpoints.
+     */
+    @Value("${cors.allowed-origins:http://localhost:3000}")
+    private List<String> allowedOrigins;
+
     @Bean
     public SecurityFilterChain securityFilterChain(HttpSecurity http) throws Exception {
         http
             .csrf(AbstractHttpConfigurer::disable)
             .cors(cors -> cors.configurationSource(request -> {
                 CorsConfiguration config = new CorsConfiguration();
-                config.setAllowedOrigins(List.of("*"));
-                config.setAllowedMethods(List.of("*"));
-                config.setAllowedHeaders(List.of("*"));
+                config.setAllowedOrigins(allowedOrigins);
+                config.setAllowedMethods(List.of("GET", "POST", "PUT", "DELETE", "OPTIONS"));
+                config.setAllowedHeaders(List.of("Authorization", "Content-Type", "Accept"));
+                config.setAllowCredentials(true);
+                config.setMaxAge(3600L);
                 return config;
             }))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))

@@ -125,7 +125,7 @@ export default function DashboardPage() {
 
     // Connect to SSE for live events
     const token = localStorage.getItem('access_token');
-    const es = new EventSource(`/admin/analytics/live${token ? `?token=${token}` : ''}`);
+    const es = new EventSource(`/api/admin/analytics/live${token ? `?token=${token}` : ''}`);
     eventSourceRef.current = es;
 
     es.onmessage = (e) => {

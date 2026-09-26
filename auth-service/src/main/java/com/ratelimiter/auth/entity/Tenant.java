@@ -32,6 +32,13 @@
 
         private String description;
 
+        /**
+         * Shared out of band with people allowed to join this tenant. NULL means
+         * registration is closed. Never returned by any endpoint.
+         */
+        @Column(name = "registration_code")
+        private String registrationCode;
+
         @Builder.Default
         private boolean active = true;
 
