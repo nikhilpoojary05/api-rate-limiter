@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ratelimiter.admin.dto.RateLimitRuleDto;
 import com.ratelimiter.admin.entity.RateLimitRule;
 import com.ratelimiter.admin.repository.RateLimitRuleRepository;
+import com.ratelimiter.admin.security.TenantAccess;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -21,17 +22,29 @@ public class RuleService {
     private final RateLimitRuleRepository repository;
     private final RedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
+    private final TenantAccess tenantAccess;
 
+    /**
+     * Authorisation lives in this service rather than the controller because the
+     * id-addressed operations below can only know which tenant they touch after
+     * loading the rule — putting the check here means no caller can skip it.
+     */
     public List<RateLimitRuleDto> getAllRules() {
-        return repository.findAll().stream().map(this::mapToDto).collect(Collectors.toList());
+        String scope = tenantAccess.resolveScope(null);
+        List<RateLimitRule> rules = scope == null
+                ? repository.findAll()
+                : repository.findByTenantIdAndActive(scope, true);
+        return rules.stream().map(this::mapToDto).collect(Collectors.toList());
     }
 
     public List<RateLimitRuleDto> getRulesByTenant(String tenantId) {
+        tenantAccess.requireAccessTo(tenantId);
         return repository.findByTenantIdAndActive(tenantId, true).stream()
                 .map(this::mapToDto).collect(Collectors.toList());
     }
 
     public RateLimitRuleDto createRule(RateLimitRuleDto dto) {
+        tenantAccess.requireAccessTo(dto.getTenantId());
         if (repository.findByTenantIdAndTier(dto.getTenantId(), dto.getTier()).isPresent()) {
             throw new IllegalArgumentException("Rule with tenant and tier already exists");
         }
@@ -42,6 +55,7 @@ public class RuleService {
 
     public RateLimitRuleDto updateRule(Long id, RateLimitRuleDto dto) {
         RateLimitRule rule = repository.findById(id).orElseThrow(() -> new RuntimeException("Rule not found"));
+        tenantAccess.requireAccessTo(rule.getTenantId());
         rule.setAlgorithm(dto.getAlgorithm());
         rule.setRequestLimit(dto.getRequestLimit());
         rule.setWindowMs(dto.getWindowMs());
@@ -54,6 +68,7 @@ public class RuleService {
 
     public void deleteRule(Long id) {
         RateLimitRule rule = repository.findById(id).orElseThrow(() -> new RuntimeException("Rule not found"));
+        tenantAccess.requireAccessTo(rule.getTenantId());
         rule.setActive(false);
         repository.save(rule);
         invalidateCache(rule.getTenantId());
@@ -62,6 +77,12 @@ public class RuleService {
     public void invalidateCache(String tenantId) {
         redisTemplate.delete("rules:" + tenantId);
         redisTemplate.delete("rules:all");
+        publishAllRulesToRedis();
+    }
+
+    /** Endpoint-facing publish: rewrites every tenant's rules, so it is super-admin only. */
+    public void publishAllRulesRequested() {
+        tenantAccess.requireSuperAdmin();
         publishAllRulesToRedis();
     }
 

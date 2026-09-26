@@ -18,7 +18,7 @@ import reactor.core.publisher.Mono;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Objects;
+import java.util.List;
 
 @Component
 @Slf4j
@@ -29,42 +29,86 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
 
+    /**
+     * Unauthenticated paths that still need a limit. These carry no tenant context, so
+     * they fall outside the per-tenant rules and are limited by source IP instead —
+     * otherwise /api/auth/login is an unlimited credential-stuffing target.
+     */
+    private static final List<String> IP_LIMITED_PREFIXES = List.of("/api/auth/");
+
     @Override
     public Mono<Void> filter(ServerWebExchange exchange, GatewayFilterChain chain) {
         ServerHttpRequest request = exchange.getRequest();
         String tenantId = request.getHeaders().getFirst("X-Tenant-Id");
 
-        // Skip rate limiting for requests without tenant context (public paths handled by JWT filter)
+        String path    = request.getURI().getPath();
+        String ip      = clientIp(request);
+        long startTime = System.currentTimeMillis();
+
         if (tenantId == null || tenantId.isBlank()) {
-            return chain.filter(exchange);
+            boolean ipLimited = IP_LIMITED_PREFIXES.stream().anyMatch(path::startsWith);
+            if (!ipLimited) {
+                return chain.filter(exchange);
+            }
+            return rateLimiterService.isAllowedForIp(ip, "auth")
+                    .flatMap(result -> {
+                        if (!result.allowed()) {
+                            long retryAfter = retryAfterSeconds(result.resetMs());
+                            addLimitHeaders(exchange, result.resetMs(), retryAfter, true);
+                            log.warn("Rate limited unauthenticated request from {} to {}", ip, path);
+                            return Mono.error(new RateLimitExceededException((int) retryAfter));
+                        }
+                        addLimitHeaders(exchange, result.resetMs(), 0, false);
+                        exchange.getResponse().getHeaders()
+                                .set("X-RateLimit-Remaining", String.valueOf(result.remaining()));
+                        return chain.filter(exchange);
+                    });
         }
 
         String userId  = request.getHeaders().getFirst("X-User-Id");
         String tier    = request.getHeaders().getFirst("X-User-Tier");
-        String ip      = Objects.requireNonNull(request.getRemoteAddress()).getAddress().getHostAddress();
-        long startTime = System.currentTimeMillis();
 
         return rateLimiterService.isAllowed(tenantId, userId, tier)
                 .flatMap(result -> {
-                    long resetMs   = result.resetMs();
-                    long retryAfter = Math.max(1, (resetMs - System.currentTimeMillis()) / 1000);
+                    long resetMs    = result.resetMs();
+                    long retryAfter = retryAfterSeconds(resetMs);
 
                     if (!result.allowed()) {
-                        exchange.getResponse().getHeaders().add("X-RateLimit-Limit", "0");
-                        exchange.getResponse().getHeaders().add("X-RateLimit-Remaining", "0");
-                        exchange.getResponse().getHeaders().add("X-RateLimit-Reset", String.valueOf(resetMs));
-                        exchange.getResponse().getHeaders().add("Retry-After", String.valueOf(retryAfter));
+                        addLimitHeaders(exchange, resetMs, retryAfter, true);
                         publishEvent(exchange, tenantId, userId, ip, startTime, "BLOCKED");
                         return Mono.error(new RateLimitExceededException((int) retryAfter));
                     }
 
-                    exchange.getResponse().getHeaders().add("X-RateLimit-Remaining", String.valueOf(result.remaining()));
-                    exchange.getResponse().getHeaders().add("X-RateLimit-Reset", String.valueOf(resetMs));
+                    addLimitHeaders(exchange, resetMs, 0, false);
+                    exchange.getResponse().getHeaders()
+                            .set("X-RateLimit-Remaining", String.valueOf(result.remaining()));
 
                     return chain.filter(exchange)
                             .doOnSuccess(v -> publishEvent(exchange, tenantId, userId, ip, startTime, "ALLOWED"))
                             .doOnError(e -> publishEvent(exchange, tenantId, userId, ip, startTime, "ERROR"));
                 });
+    }
+
+    private static long retryAfterSeconds(long resetMs) {
+        return Math.max(1, (resetMs - System.currentTimeMillis()) / 1000);
+    }
+
+    /** Uses set() rather than add() so a retried request cannot accumulate duplicate headers. */
+    private static void addLimitHeaders(ServerWebExchange exchange, long resetMs,
+                                        long retryAfter, boolean blocked) {
+        var headers = exchange.getResponse().getHeaders();
+        headers.set("X-RateLimit-Reset", String.valueOf(resetMs));
+        if (blocked) {
+            headers.set("X-RateLimit-Remaining", "0");
+            headers.set("Retry-After", String.valueOf(retryAfter));
+        }
+    }
+
+    private static String clientIp(ServerHttpRequest request) {
+        var remote = request.getRemoteAddress();
+        return remote != null && remote.getAddress() != null
+                ? remote.getAddress().getHostAddress()
+                : "unknown";
     }
 
     /**

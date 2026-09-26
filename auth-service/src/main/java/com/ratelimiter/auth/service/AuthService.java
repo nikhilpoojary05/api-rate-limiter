@@ -40,6 +40,19 @@ public class AuthService {
     private static final long REFRESH_TOKEN_EXPIRY_DAYS = 7;
     private static final String REDIS_REFRESH_PREFIX = "refresh:";
 
+    /**
+     * Failed-login throttling. The gateway limits login attempts per source IP; this
+     * complements it by limiting attempts per account, so a distributed attempt against
+     * one account is slowed too.
+     *
+     * <p>Counting per username means an attacker can deliberately lock a known account
+     * out. That is why this is a short cooling-off window rather than a lock that needs
+     * an administrator to clear, and why a successful login resets it immediately.
+     */
+    private static final String REDIS_LOGIN_FAIL_PREFIX = "login:fail:";
+    private static final int MAX_FAILED_ATTEMPTS = 5;
+    private static final long LOCKOUT_MINUTES = 15;
+
     @Transactional
     public UserDto register(RegisterRequest request) {
         if (userRepository.existsByUsername(request.getUsername())) {
@@ -72,16 +85,25 @@ public class AuthService {
 
     @Transactional
     public AuthResponse login(LoginRequest request) {
-        AppUser user = userRepository.findByUsername(request.getUsername())
-                .orElseThrow(() -> new BadCredentialsException("Invalid username or password"));
+        String username = request.getUsername();
 
-        if (!passwordEncoder.matches(request.getPassword(), user.getPassword())) {
+        if (isTemporarilyLocked(username)) {
+            log.warn("Rejected login for '{}': too many recent failed attempts", username);
             throw new BadCredentialsException("Invalid username or password");
         }
 
-        if (!user.isActive()) {
-            throw new RuntimeException("User account is disabled");
+        // Same exception and message for unknown user, wrong password and disabled
+        // account, so responses cannot be used to enumerate valid usernames.
+        AppUser user = userRepository.findByUsername(username).orElse(null);
+
+        if (user == null
+                || !passwordEncoder.matches(request.getPassword(), user.getPassword())
+                || !user.isActive()) {
+            recordFailedAttempt(username);
+            throw new BadCredentialsException("Invalid username or password");
         }
+
+        clearFailedAttempts(username);
 
         String userId = String.valueOf(user.getId());
 
@@ -154,6 +176,23 @@ public class AuthService {
                 .refreshToken(refreshTokenStr)
                 .user(mapToUserDto(user))
                 .build();
+    }
+
+    private boolean isTemporarilyLocked(String username) {
+        String attempts = redisTemplate.opsForValue().get(REDIS_LOGIN_FAIL_PREFIX + username);
+        return attempts != null && Integer.parseInt(attempts) >= MAX_FAILED_ATTEMPTS;
+    }
+
+    private void recordFailedAttempt(String username) {
+        String key = REDIS_LOGIN_FAIL_PREFIX + username;
+        Long count = redisTemplate.opsForValue().increment(key);
+        if (count != null && count == 1L) {
+            redisTemplate.expire(key, LOCKOUT_MINUTES, TimeUnit.MINUTES);
+        }
+    }
+
+    private void clearFailedAttempts(String username) {
+        redisTemplate.delete(REDIS_LOGIN_FAIL_PREFIX + username);
     }
 
     @Transactional

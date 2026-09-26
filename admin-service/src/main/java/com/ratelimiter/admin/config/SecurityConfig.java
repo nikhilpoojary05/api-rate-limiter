@@ -35,7 +35,9 @@ public class SecurityConfig {
             }))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
-                .requestMatchers("/actuator/**", "/swagger-ui/**", "/v3/api-docs/**", "/admin/analytics/live", "/swagger-ui.html").permitAll()
+                // "/admin/analytics/live" is deliberately NOT public: it streams every
+                // tenant's traffic, including client IPs and request paths.
+                .requestMatchers("/actuator/**", "/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
                 .requestMatchers("/admin/**").hasRole("ADMIN")
                 .anyRequest().authenticated()
             )

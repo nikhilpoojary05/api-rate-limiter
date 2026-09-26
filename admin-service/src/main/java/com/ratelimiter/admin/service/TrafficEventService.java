@@ -51,7 +51,15 @@ public class TrafficEventService {
                 .stream().map(this::mapToDto).collect(Collectors.toList());
     }
 
-    public AnalyticsSummaryDto getSummary() {
+    /**
+     * @param tenantId restrict every figure to this tenant, or null for a cross-tenant
+     *                 summary. Only callers with cross-tenant rights may pass null —
+     *                 see TenantAccess.resolveScope.
+     */
+    public AnalyticsSummaryDto getSummary(String tenantId) {
+        if (tenantId != null && !tenantId.isBlank()) {
+            return getSummaryForTenant(tenantId);
+        }
         LocalDateTime last24h = LocalDateTime.now().minusHours(24);
         long total = repository.countEventsSince(last24h);
         long blocked = repository.countByStatusSince("BLOCKED", last24h);
@@ -65,6 +73,21 @@ public class TrafficEventService {
                 .collect(Collectors.toList());
 
         return new AnalyticsSummaryDto(total, blocked, blockRate, avgLatency, activeTenants, topBlockedList);
+    }
+
+    private AnalyticsSummaryDto getSummaryForTenant(String tenantId) {
+        LocalDateTime last24h = LocalDateTime.now().minusHours(24);
+        long total = repository.countEventsSinceForTenant(tenantId, last24h);
+        long blocked = repository.countByStatusSinceForTenant(tenantId, "BLOCKED", last24h);
+        double blockRate = total > 0 ? (double) blocked / total * 100 : 0;
+        double avgLatency = repository.getAverageLatencyForTenant(tenantId);
+
+        // The caller sees only their own tenant, so the "top blocked" list is just them.
+        List<TenantTrafficStat> topBlocked = blocked > 0
+                ? List.of(new TenantTrafficStat(tenantId, blocked))
+                : List.of();
+
+        return new AnalyticsSummaryDto(total, blocked, blockRate, avgLatency, 1, topBlocked);
     }
 
     public List<TimeSeriesPointDto> getTimeSeriesData(String tenantId, String range) {

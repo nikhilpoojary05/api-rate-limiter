@@ -1,6 +1,7 @@
 package com.ratelimiter.admin.exception;
 
 import org.springframework.http.HttpStatus;
+import org.springframework.security.access.AccessDeniedException;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -23,6 +24,15 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(IllegalArgumentException.class)
     public ResponseEntity<Map<String, String>> handleIllegalArgument(IllegalArgumentException ex) {
         return new ResponseEntity<>(Map.of("error", ex.getMessage()), HttpStatus.BAD_REQUEST);
+    }
+
+    /**
+     * Without this, AccessDeniedException falls through to the RuntimeException handler
+     * below and is reported as a 500 instead of a 403.
+     */
+    @ExceptionHandler(AccessDeniedException.class)
+    public ResponseEntity<Map<String, String>> handleAccessDenied(AccessDeniedException ex) {
+        return new ResponseEntity<>(Map.of("error", "Forbidden"), HttpStatus.FORBIDDEN);
     }
 
     @ExceptionHandler(RuntimeException.class)

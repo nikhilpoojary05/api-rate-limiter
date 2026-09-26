@@ -35,6 +35,14 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
             "/swagger-ui"
     );
 
+    /**
+     * The browser EventSource API cannot set an Authorization header, so the live
+     * analytics stream accepts its token as a query parameter. Restricted to this one
+     * path — the token does reach access logs, so prefer a short-lived single-use SSE
+     * ticket if this runs behind a logging proxy.
+     */
+    private static final String SSE_PATH = "/api/admin/analytics/live";
+
     // Identity headers the gateway alone is allowed to set. Anything a client sends
     // under these names is discarded so downstream services can trust them.
     private static final List<String> IDENTITY_HEADERS = List.of(
@@ -56,13 +64,11 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
             return chain.filter(exchange.mutate().request(stripped).build());
         }
 
-        String authHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
-        if (authHeader == null || !authHeader.startsWith("Bearer ")) {
-            log.debug("Missing or invalid Authorization header for path: {}", path);
+        String token = resolveToken(exchange, path);
+        if (token == null || token.isBlank()) {
+            log.debug("Missing or invalid credentials for path: {}", path);
             return unauthorizedResponse(exchange.getResponse(), "Missing or invalid Authorization header");
         }
-
-        String token = authHeader.substring(7);
 
         try {
             if (!jwtUtils.validateToken(token)) {
@@ -93,6 +99,17 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
             log.warn("JWT authentication failed for path {}: {}", path, e.getMessage());
             return unauthorizedResponse(exchange.getResponse(), "Token validation error");
         }
+    }
+
+    private String resolveToken(ServerWebExchange exchange, String path) {
+        String authHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
+        if (authHeader != null && authHeader.startsWith("Bearer ") && authHeader.length() > 7) {
+            return authHeader.substring(7);
+        }
+        if (SSE_PATH.equals(path)) {
+            return exchange.getRequest().getQueryParams().getFirst("token");
+        }
+        return null;
     }
 
     private Mono<Void> unauthorizedResponse(ServerHttpResponse response, String message) {
