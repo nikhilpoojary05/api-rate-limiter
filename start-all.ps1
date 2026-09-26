@@ -8,7 +8,24 @@ $ErrorActionPreference = "Continue"
 $ROOT = "C:\api-rate-limiter"
 $JAVA = "java"
 $JVM_OPTS = "-Xms256m -Xmx512m"
-$PG_PASS = "<redacted>"
+# Secrets are read from .env (gitignored), never hardcoded here.
+$envFile = Join-Path $ROOT ".env"
+if (-not (Test-Path $envFile)) {
+    Write-Host "Missing .env - copy .env.example to .env and fill in the values." -ForegroundColor Red
+    exit 1
+}
+Get-Content $envFile | ForEach-Object {
+    if ($_ -match '^\s*([A-Za-z_][A-Za-z0-9_]*)\s*=\s*(.*)$') {
+        Set-Item -Path "env:$($Matches[1])" -Value $Matches[2].Trim()
+    }
+}
+foreach ($required in @("JWT_SECRET", "POSTGRES_PASSWORD")) {
+    if (-not (Get-Item "env:$required" -ErrorAction SilentlyContinue)) {
+        Write-Host "$required is not set in .env" -ForegroundColor Red
+        exit 1
+    }
+}
+$PG_PASS = $env:POSTGRES_PASSWORD
 $env:PGPASSWORD = $PG_PASS
 
 Write-Host ""
@@ -69,7 +86,7 @@ Write-Host "      Databases ready (ratelimiter_auth, ratelimiter_admin)." -Foreg
 
 # ── Step 4: Stop any previously running services on target ports ─────────────
 Write-Host "[4/5] Freeing ports 8080, 8081, 8082, 8083..." -ForegroundColor Yellow
-@(8081, 8082, 8083, 8090) | ForEach-Object {
+@(8081, 8082, 8083, 8080) | ForEach-Object {
     $port = $_
     $pids = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess
     $pids | Where-Object { $_ -gt 0 } | ForEach-Object {
@@ -84,11 +101,10 @@ Write-Host "      Ports cleared." -ForegroundColor Green
 Write-Host "[5/5] Starting services..." -ForegroundColor Yellow
 Write-Host ""
 
-$JWT_SECRET = "SuperSecretKeyForJwtSigningThatIsAtLeast256BitsLong!!"
-
 function Start-Service {
     param($Name, $JarPath, $Port, $ExtraArgs)
     Write-Host "      Starting $Name on port $Port..." -ForegroundColor Cyan
+    # JWT_SECRET / POSTGRES_PASSWORD are inherited from this process's environment.
     $args = "$JVM_OPTS -jar `"$JarPath`" $ExtraArgs"
     Start-Process -FilePath $JAVA `
         -ArgumentList $args `
@@ -104,16 +120,14 @@ New-Item -ItemType Directory -Path "$ROOT\logs" -Force | Out-Null
 # Launch Auth Service
 Start-Service -Name "auth-service" `
     -JarPath "$ROOT\auth-service\target\auth-service-1.0.0.jar" `
-    -Port 8081 `
-    -ExtraArgs "--spring.datasource.password=$PG_PASS --jwt.secret=$JWT_SECRET"
+    -Port 8081
 
 Start-Sleep 3
 
 # Launch Admin Service
 Start-Service -Name "admin-service" `
     -JarPath "$ROOT\admin-service\target\admin-service-1.0.0.jar" `
-    -Port 8082 `
-    -ExtraArgs "--spring.datasource.password=$PG_PASS --jwt.secret=$JWT_SECRET"
+    -Port 8082
 
 Start-Sleep 3
 
@@ -127,8 +141,7 @@ Start-Sleep 2
 # Launch Gateway Service (last — it needs all upstream services)
 Start-Service -Name "gateway-service" `
     -JarPath "$ROOT\gateway-service\target\gateway-service-1.0.0.jar" `
-    -Port 8090 `
-    -ExtraArgs "--jwt.secret=$JWT_SECRET"
+    -Port 8080
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -139,10 +152,10 @@ Write-Host "  Waiting for services to become ready..." -ForegroundColor Yellow
 
 # ── Health Check Loop ─────────────────────────────────────────────────────────
 $services = @(
-    @{ Name="Auth Service";    Url="http://localhost:8081/actuator/health"; Port=8081 },
-    @{ Name="Admin Service";   Url="http://localhost:8082/actuator/health"; Port=8082 },
-    @{ Name="Demo Service";    Url="http://localhost:8083/actuator/health"; Port=8083 },
-    @{ Name="Gateway Service"; Url="http://localhost:8090/actuator/health"; Port=8090 }
+    @{ Name="Auth Service";    Url="http://localhost:9081/actuator/health"; Port=8081 },
+    @{ Name="Admin Service";   Url="http://localhost:9082/actuator/health"; Port=8082 },
+    @{ Name="Demo Service";    Url="http://localhost:9083/actuator/health"; Port=8083 },
+    @{ Name="Gateway Service"; Url="http://localhost:9080/actuator/health"; Port=8080 }
 )
 
 $maxWait = 90   # seconds
@@ -190,13 +203,13 @@ if ($allUp) {
 
 Write-Host ""
 Write-Host "  Service URLs:" -ForegroundColor Cyan
-Write-Host "    Gateway (main entry):  http://localhost:8090"
+Write-Host "    Gateway (main entry):  http://localhost:8080"
 Write-Host "    Auth Service:          http://localhost:8081/swagger-ui.html"
 Write-Host "    Admin Service:         http://localhost:8082/swagger-ui.html"
 Write-Host "    Demo Service:          http://localhost:8083/actuator/health"
 Write-Host ""
 Write-Host "  Test login:" -ForegroundColor Cyan
-Write-Host '    Invoke-RestMethod http://localhost:8090/api/auth/login -Method POST -ContentType "application/json" -Body ' + "'" + '{"username":"admin","password":"Admin@123!","tenantId":"acme-corp"}' + "'"
+Write-Host '    Invoke-RestMethod http://localhost:8080/api/auth/login -Method POST -ContentType "application/json" -Body ' + "'" + '{"username":"admin","password":"Admin@123!","tenantId":"acme-corp"}' + "'"
 Write-Host ""
 Write-Host "  Logs directory: $ROOT\logs\" -ForegroundColor DarkGray
 Write-Host ""

@@ -85,10 +85,10 @@ public class AuthService {
 
         String userId = String.valueOf(user.getId());
 
-        // JwtUtils.generateAccessToken(userId, username, tenantId, tier, roles)
         String accessToken = jwtUtils.generateAccessToken(
             userId,
             user.getUsername(),
+            resolveTenantSlug(user),
             user.getTenantId().toString(),
             user.getTier(),
             user.getRoles()
@@ -143,6 +143,7 @@ public class AuthService {
         String newAccessToken = jwtUtils.generateAccessToken(
             String.valueOf(user.getId()),
             user.getUsername(),
+            resolveTenantSlug(user),
             user.getTenantId().toString(),
             user.getTier(),
             user.getRoles()
@@ -169,12 +170,27 @@ public class AuthService {
         return mapToUserDto(user);
     }
 
+    /**
+     * The tenant's human-readable name is the canonical tenant key across the system —
+     * rate limit rules, tenant records and traffic analytics are all stored against it.
+     * The UUID stays the auth-service's own primary key.
+     */
+    private String resolveTenantSlug(AppUser user) {
+        if (user.getTenantId() == null) {
+            throw new IllegalStateException("User " + user.getId() + " has no tenant assigned");
+        }
+        return tenantRepository.findById(user.getTenantId())
+                .map(Tenant::getName)
+                .orElseThrow(() -> new IllegalStateException(
+                        "Tenant " + user.getTenantId() + " referenced by user " + user.getId() + " does not exist"));
+    }
+
     private UserDto mapToUserDto(AppUser user) {
         return UserDto.builder()
                 .id(user.getId())
                 .username(user.getUsername())
                 .email(user.getEmail())
-                .tenantId(user.getTenantId().toString())        
+                .tenantId(resolveTenantSlug(user))
                 .tier(user.getTier())
                 .roles(user.getRoles())
                 .build();

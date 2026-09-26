@@ -6,9 +6,9 @@ spring:
     name: auth-service
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/ratelimiter_auth
-    username: postgres
-    password: <redacted>
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/ratelimiter_auth}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD}
     driver-class-name: org.postgresql.Driver
 
   jpa:
@@ -33,18 +33,26 @@ spring:
       port: 6379
 
 jwt:
-  secret: ${JWT_SECRET:SuperSecretKeyForJwtSigningThatIsAtLeast256BitsLong!!}
+  # No default: the service must not start without an explicitly configured key.
+  secret: ${JWT_SECRET}
   access-token-expiry-ms: 900000
   refresh-token-expiry-ms: 604800000
 
 management:
+  # Actuator runs on its own port, never published outside the Docker network.
+  # Spring Cloud Gateway's GlobalFilter does not apply to actuator endpoints, so
+  # the JWT filter cannot protect them — keeping them off the public port is the
+  # only reliable boundary.
+  server:
+    port: ${MANAGEMENT_PORT:9081}
+
   endpoints:
     web:
       exposure:
         include: health,info,metrics,prometheus
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
 
 springdoc:
   api-docs:

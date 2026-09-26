@@ -2,6 +2,7 @@ package com.ratelimiter.common.security;
 
 import io.jsonwebtoken.*;
 import io.jsonwebtoken.security.Keys;
+import jakarta.annotation.PostConstruct;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
@@ -14,7 +15,8 @@ import java.util.*;
 @Component
 public class JwtUtils {
 
-    @Value("${jwt.secret:your-256-bit-secret-key-for-jwt-signing-must-be-long-enough}")
+    /** No default: a missing JWT_SECRET must stop the service, not fall back to a shared key. */
+    @Value("${jwt.secret}")
     private String jwtSecret;
 
     @Value("${jwt.access-token-expiry-ms:900000}") // 15 minutes
@@ -23,15 +25,47 @@ public class JwtUtils {
     @Value("${jwt.refresh-token-expiry-ms:604800000}") // 7 days
     private long refreshTokenExpiryMs;
 
+    /** Signing keys that shipped in this repo's history and must never be used again. */
+    private static final Set<String> BANNED_SECRETS = Set.of(
+            "SuperSecretKeyForJwtSigningThatIsAtLeast256BitsLong!!",
+            "your-256-bit-secret-key-for-jwt-signing-must-be-long-enough"
+    );
+
+    private static final int MIN_SECRET_BYTES = 32; // HS256 requires a 256-bit key
+
+    @PostConstruct
+    void validateSecret() {
+        if (jwtSecret == null || jwtSecret.isBlank()) {
+            throw new IllegalStateException(
+                    "jwt.secret is not configured. Set the JWT_SECRET environment variable.");
+        }
+        if (jwtSecret.getBytes(StandardCharsets.UTF_8).length < MIN_SECRET_BYTES) {
+            throw new IllegalStateException(
+                    "jwt.secret must be at least " + MIN_SECRET_BYTES + " bytes for HS256.");
+        }
+        if (BANNED_SECRETS.contains(jwtSecret)) {
+            throw new IllegalStateException(
+                    "jwt.secret is a known placeholder key that was published in this repository. "
+                    + "Generate a new one, e.g. openssl rand -base64 48");
+        }
+    }
+
     private SecretKey getSigningKey() {
         byte[] keyBytes = jwtSecret.getBytes(StandardCharsets.UTF_8);
         return Keys.hmacShaKeyFor(keyBytes);
     }
 
-    public String generateAccessToken(String userId, String username, String tenantId,
-                                       String tier, Collection<String> roles) {
+    /**
+     * @param tenantSlug human-readable tenant key ("acme-corp"). This is the canonical
+     *                   tenant identity on the wire: rate limit rules, tenant records and
+     *                   traffic analytics are all keyed by it.
+     * @param tenantUid  the auth-service UUID for the tenant, carried for internal lookups.
+     */
+    public String generateAccessToken(String userId, String username, String tenantSlug,
+                                       String tenantUid, String tier, Collection<String> roles) {
         Map<String, Object> claims = new HashMap<>();
-        claims.put("tenant_id", tenantId);
+        claims.put("tenant_id", tenantSlug);
+        claims.put("tenant_uid", tenantUid);
         claims.put("tier", tier);
         claims.put("roles", roles);
         claims.put("username", username);
@@ -90,6 +124,10 @@ public class JwtUtils {
 
     public String extractTenantId(String token) {
         return parseToken(token).get("tenant_id", String.class);
+    }
+
+    public String extractTenantUid(String token) {
+        return parseToken(token).get("tenant_uid", String.class);
     }
 
     public String extractTier(String token) {

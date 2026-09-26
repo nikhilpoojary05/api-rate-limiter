@@ -8,15 +8,15 @@ services:
     container_name: rl-postgres
     restart: unless-stopped
     environment:
-      POSTGRES_DB: ratelimiter
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB must be set in .env}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"   # loopback only — not reachable off-host
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ratelimiter"]
+      test: ["CMD-SHELL", "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB"]
       interval: 10s
       timeout: 5s
       retries: 5
@@ -27,7 +27,7 @@ services:
     restart: unless-stopped
     command: redis-server --appendonly yes --maxmemory 256mb --maxmemory-policy allkeys-lru
     ports:
-      - "6379:6379"
+      - "127.0.0.1:6379:6379"   # loopback only — not reachable off-host
     volumes:
       - redis-data:/data
     healthcheck:
@@ -41,7 +41,7 @@ services:
     container_name: rl-zipkin
     restart: unless-stopped
     ports:
-      - "9411:9411"
+      - "127.0.0.1:9411:9411"   # loopback only — not reachable off-host
     environment:
       - STORAGE_TYPE=mem
     healthcheck:
@@ -55,7 +55,7 @@ services:
     container_name: rl-prometheus
     restart: unless-stopped
     ports:
-      - "9090:9090"
+      - "127.0.0.1:9090:9090"   # loopback only — not reachable off-host
     volumes:
       - ./prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
@@ -76,10 +76,10 @@ services:
     container_name: rl-grafana
     restart: unless-stopped
     ports:
-      - "3001:3000"
+      - "127.0.0.1:3001:3000"   # loopback only — not reachable off-host
     environment:
-      - GF_SECURITY_ADMIN_USER=admin
-      - GF_SECURITY_ADMIN_PASSWORD=admin
+      - GF_SECURITY_ADMIN_USER=${GF_SECURITY_ADMIN_USER:?must be set in .env}
+      - GF_SECURITY_ADMIN_PASSWORD=${GF_SECURITY_ADMIN_PASSWORD:?must be set in .env}
       - GF_USERS_ALLOW_SIGN_UP=false
     volumes:
       - grafana-data:/var/lib/grafana
@@ -102,15 +102,15 @@ services:
       dockerfile: Dockerfile
     container_name: rl-auth-service
     restart: unless-stopped
-    ports:
-      - "8081:8081"
+    expose:
+      - "8081"   # internal network only — reach it through the gateway
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ratelimiter
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      JWT_SECRET: ${JWT_SECRET:-SuperSecretKeyForJwtSigningThatIsAtLeast256BitsLong!!}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
       MANAGEMENT_ZIPKIN_TRACING_ENDPOINT: http://zipkin:9411/api/v2/spans
     depends_on:
       postgres:
@@ -118,7 +118,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9081/actuator/health || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
@@ -129,15 +129,15 @@ services:
       dockerfile: Dockerfile
     container_name: rl-admin-service
     restart: unless-stopped
-    ports:
-      - "8082:8082"
+    expose:
+      - "8082"   # internal network only — reach it through the gateway
     environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/ratelimiter
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: postgres
+      SPRING_DATASOURCE_URL: jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      SPRING_DATASOURCE_USERNAME: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
+      SPRING_DATASOURCE_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      JWT_SECRET: ${JWT_SECRET:-SuperSecretKeyForJwtSigningThatIsAtLeast256BitsLong!!}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
     depends_on:
       postgres:
         condition: service_healthy
@@ -146,7 +146,7 @@ services:
       auth-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8082/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9082/actuator/health || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
@@ -162,7 +162,7 @@ services:
     environment:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
-      JWT_SECRET: ${JWT_SECRET:-SuperSecretKeyForJwtSigningThatIsAtLeast256BitsLong!!}
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET must be set in .env}
       ZIPKIN_URL: http://zipkin:9411/api/v2/spans
       AUTH_SERVICE_URI: http://auth-service:8081
       ADMIN_SERVICE_URI: http://admin-service:8082
@@ -175,7 +175,7 @@ services:
       admin-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "curl -f http://localhost:9080/actuator/health || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
@@ -186,8 +186,8 @@ services:
       dockerfile: Dockerfile
     container_name: rl-demo-service
     restart: unless-stopped
-    ports:
-      - "8083:8083"
+    expose:
+      - "8083"   # internal network only — reach it through the gateway
     depends_on:
       - gateway-service
 

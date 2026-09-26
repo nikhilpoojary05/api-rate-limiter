@@ -3,6 +3,7 @@ package com.ratelimiter.gateway.ratelimit;
 import com.ratelimiter.gateway.model.RateLimitResult;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
@@ -17,6 +18,15 @@ public class TokenBucketRateLimiter {
 
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final RedisScript<List> tokenBucketScript;
+
+    /**
+     * When Redis is unreachable we cannot know whether the caller is over their limit.
+     * Denying is the safe answer for a rate limiter: failing open let anyone who could
+     * degrade Redis switch rate limiting off entirely. Flip this only if availability
+     * matters more than enforcement for your deployment.
+     */
+    @Value("${ratelimit.fail-open:false}")
+    private boolean failOpen;
 
     public TokenBucketRateLimiter(
             @Qualifier("reactiveRedisTemplate")
@@ -63,13 +73,15 @@ public class TokenBucketRateLimiter {
         .onErrorResume(e -> {
 
             log.error(
-                    "Redis script error in TokenBucketRateLimiter",
+                    "Redis script error in TokenBucketRateLimiter — failing {}",
+                    failOpen ? "open" : "closed",
                     e
             );
 
-            // Fail-open
             return Mono.just(
-                    new RateLimitResult(true, 1, 0)
+                    failOpen
+                            ? new RateLimitResult(true, 1, 0)
+                            : new RateLimitResult(false, 0, now + windowMs)
             );
         });
     }
