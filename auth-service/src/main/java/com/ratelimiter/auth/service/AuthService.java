@@ -7,6 +7,7 @@ import com.ratelimiter.auth.dto.UserDto;
 import com.ratelimiter.auth.entity.AppUser;
 import com.ratelimiter.auth.entity.RefreshToken;
 import com.ratelimiter.auth.entity.Tenant;
+import com.ratelimiter.auth.exception.ClientVisibleException;
 import com.ratelimiter.auth.repository.RefreshTokenRepository;
 import com.ratelimiter.auth.repository.TenantRepository;
 import com.ratelimiter.auth.repository.UserRepository;
@@ -58,11 +59,15 @@ public class AuthService {
 
     @Transactional
     public UserDto register(RegisterRequest request) {
+        // These two do let a caller probe which usernames and emails are registered.
+        // Removing that requires an email-confirmation flow, which this service has no
+        // mail transport for; registration is rate limited per IP in the meantime. This
+        // is a deliberate trade-off for usable signup, not an oversight.
         if (userRepository.existsByUsername(request.getUsername())) {
-            throw new RuntimeException("Username is already taken");
+            throw new ClientVisibleException("Username is already taken");
         }
         if (userRepository.existsByEmail(request.getEmail())) {
-            throw new RuntimeException("Email is already in use");
+            throw new ClientVisibleException("Email is already in use");
         }
 
         Tenant tenant = resolveTenantForRegistration(request);
@@ -116,7 +121,7 @@ public class AuthService {
                         request.getRegistrationCode().getBytes(StandardCharsets.UTF_8))) {
             log.warn("Rejected registration for tenant '{}': unknown tenant or bad code",
                     request.getTenantId());
-            throw new RuntimeException("Unknown tenant or invalid registration code");
+            throw new ClientVisibleException("Unknown tenant or invalid registration code");
         }
 
         return tenant;
@@ -179,7 +184,7 @@ public class AuthService {
     @Transactional
     public AuthResponse refresh(String refreshTokenStr) {
         if (refreshTokenStr == null || refreshTokenStr.isBlank()) {
-            throw new RuntimeException("Invalid or expired refresh token");
+            throw new ClientVisibleException("Invalid or expired refresh token");
         }
 
         RefreshToken stored = refreshTokenRepository.findByToken(refreshTokenStr).orElse(null);
@@ -189,19 +194,19 @@ public class AuthService {
             int revoked = refreshTokenRevoker.revokeAllForUser(stored.getUserId());
             log.warn("Refresh token replay detected for userId={} — revoked {} outstanding tokens",
                     stored.getUserId(), revoked);
-            throw new RuntimeException("Invalid or expired refresh token");
+            throw new ClientVisibleException("Invalid or expired refresh token");
         }
 
         // Redis is the fast revocation check; the row above is the source of truth.
         String cachedUserId = redisTemplate.opsForValue().get(REDIS_REFRESH_PREFIX + refreshTokenStr);
         if (cachedUserId == null || stored == null) {
-            throw new RuntimeException("Invalid or expired refresh token");
+            throw new ClientVisibleException("Invalid or expired refresh token");
         }
 
         RefreshToken refreshToken = stored;
 
         if (refreshToken.getExpiresAt().isBefore(LocalDateTime.now())) {
-            throw new RuntimeException("Invalid or expired refresh token");
+            throw new ClientVisibleException("Invalid or expired refresh token");
         }
 
         AppUser user = userRepository.findById(Long.valueOf(refreshToken.getUserId()))
