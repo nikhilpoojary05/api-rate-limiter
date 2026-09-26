@@ -45,7 +45,7 @@ public class RuleController {
 
     @PostMapping("/publish")
     public ResponseEntity<Void> publishRules() {
-        ruleService.publishAllRulesToRedis();
+        ruleService.publishAllRulesRequested();
         return ResponseEntity.ok().build();
     }
 }

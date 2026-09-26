@@ -30,7 +30,9 @@ public class GlobalErrorWebExceptionHandler implements ErrorWebExceptionHandler 
         exchange.getResponse().getHeaders().setContentType(MediaType.APPLICATION_JSON);
         
         if (retryAfter > 0) {
-            exchange.getResponse().getHeaders().add("Retry-After", String.valueOf(retryAfter));
+            // set(), not add(): RateLimitingFilter has already written this header and
+            // add() would send it twice.
+            exchange.getResponse().getHeaders().set("Retry-After", String.valueOf(retryAfter));
         }
 
         String json = String.format("{\"error\": \"%s\", \"retryAfter\": %d}", message, retryAfter);

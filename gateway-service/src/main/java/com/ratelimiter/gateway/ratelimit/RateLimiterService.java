@@ -45,6 +45,17 @@ public class RateLimiterService {
     @Value("${ratelimit.default.window-ms:60000}")
     private long defaultWindowMs;
 
+    /**
+     * Limit for unauthenticated endpoints, keyed by client IP. Login and registration
+     * carry no tenant context, so they were previously skipped entirely — leaving the
+     * one endpoint worth brute-forcing as the only one with no rate limit at all.
+     */
+    @Value("${ratelimit.public.request-limit:20}")
+    private int publicRequestLimit;
+
+    @Value("${ratelimit.public.window-ms:60000}")
+    private long publicWindowMs;
+
     private final Map<String, RateLimitRule> ruleCache = new ConcurrentHashMap<>();
 
     @EventListener(ApplicationReadyEvent.class)
@@ -110,6 +121,21 @@ public class RateLimiterService {
                     return json;
                 })
                 .then();
+    }
+
+    /**
+     * Rate limit an unauthenticated caller by source IP.
+     *
+     * <p>Note this trusts the socket address. Behind a reverse proxy or load balancer
+     * every request appears to come from the proxy, so configure trusted-proxy forwarded
+     * header handling before relying on this in production.
+     */
+    public Mono<RateLimitResult> isAllowedForIp(String ip, String scope) {
+        return slidingWindowRateLimiter.checkLimit(
+                "public:" + scope + ":" + ip,
+                publicRequestLimit,
+                publicWindowMs
+        );
     }
 
     public Mono<RateLimitResult> isAllowed(

@@ -31,4 +31,18 @@ public interface TrafficEventRepository extends JpaRepository<TrafficEvent, Long
 
     @Query("SELECT t.tenantId, COUNT(t) as c FROM TrafficEvent t WHERE t.status = 'BLOCKED' GROUP BY t.tenantId ORDER BY c DESC LIMIT 5")
     List<Object[]> findTopBlockedTenants();
+
+    // Tenant-scoped variants of the above. The unscoped queries aggregate across every
+    // tenant, which a single tenant's administrator must not see.
+
+    @Query("SELECT COUNT(t) FROM TrafficEvent t WHERE t.tenantId = :tenantId AND t.timestamp >= :since")
+    long countEventsSinceForTenant(@Param("tenantId") String tenantId, @Param("since") LocalDateTime since);
+
+    @Query("SELECT COUNT(t) FROM TrafficEvent t WHERE t.tenantId = :tenantId AND t.status = :status AND t.timestamp >= :since")
+    long countByStatusSinceForTenant(@Param("tenantId") String tenantId,
+                                     @Param("status") String status,
+                                     @Param("since") LocalDateTime since);
+
+    @Query("SELECT COALESCE(AVG(t.latencyMs), 0) FROM TrafficEvent t WHERE t.tenantId = :tenantId")
+    double getAverageLatencyForTenant(@Param("tenantId") String tenantId);
 }
