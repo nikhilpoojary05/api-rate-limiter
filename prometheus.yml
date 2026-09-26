@@ -10,20 +10,20 @@ scrape_configs:
   - job_name: 'gateway-service'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['gateway-service:8080']
+      - targets: ['gateway-service:9080']
     scrape_interval: 5s
 
   - job_name: 'auth-service'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['auth-service:8081']
+      - targets: ['auth-service:9081']
 
   - job_name: 'admin-service'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['admin-service:8082']
+      - targets: ['admin-service:9082']
 
   - job_name: 'demo-service'
     metrics_path: '/actuator/prometheus'
     static_configs:
-      - targets: ['demo-service:8083']
+      - targets: ['demo-service:9083']

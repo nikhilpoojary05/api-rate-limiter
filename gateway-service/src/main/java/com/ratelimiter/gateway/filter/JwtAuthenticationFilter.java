@@ -25,12 +25,20 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
 
     private final JwtUtils jwtUtils;
 
-    // Paths that bypass JWT auth
+    // Paths that bypass JWT auth. Keep this as narrow as possible — "/actuator/"
+    // as a whole would publish /actuator/prometheus and any other exposed endpoint.
     private static final List<String> PUBLIC_PATHS = List.of(
             "/api/auth/",
-            "/actuator/",
+            "/actuator/health",
+            "/actuator/info",
             "/v3/api-docs",
             "/swagger-ui"
+    );
+
+    // Identity headers the gateway alone is allowed to set. Anything a client sends
+    // under these names is discarded so downstream services can trust them.
+    private static final List<String> IDENTITY_HEADERS = List.of(
+            "X-User-Id", "X-Tenant-Id", "X-Tenant-Uid", "X-User-Tier", "X-User-Roles"
     );
 
     @Override
@@ -40,7 +48,12 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
         // Skip auth for public paths
         boolean isPublic = PUBLIC_PATHS.stream().anyMatch(path::startsWith);
         if (isPublic) {
-            return chain.filter(exchange);
+            // Still strip identity headers: an unauthenticated caller must not be able to
+            // inject X-Tenant-Id or X-User-Roles by aiming at a public route.
+            ServerHttpRequest stripped = exchange.getRequest().mutate()
+                    .headers(headers -> IDENTITY_HEADERS.forEach(headers::remove))
+                    .build();
+            return chain.filter(exchange.mutate().request(stripped).build());
         }
 
         String authHeader = exchange.getRequest().getHeaders().getFirst(HttpHeaders.AUTHORIZATION);
@@ -57,9 +70,10 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
             }
 
             // Extract claims using actual JwtUtils method names
-            String userId   = jwtUtils.extractUserId(token);
-            String tenantId = jwtUtils.extractTenantId(token);
-            String tier     = jwtUtils.extractTier(token);
+            String userId    = jwtUtils.extractUserId(token);
+            String tenantId  = jwtUtils.extractTenantId(token);   // canonical slug, e.g. "acme-corp"
+            String tenantUid = jwtUtils.extractTenantUid(token);
+            String tier      = jwtUtils.extractTier(token);
             List<String> roles = jwtUtils.extractRoles(token);
             String rolesHeader = String.join(",", roles);
 
@@ -67,6 +81,7 @@ public class JwtAuthenticationFilter implements GlobalFilter, Ordered {
             ServerHttpRequest mutatedRequest = exchange.getRequest().mutate()
                     .header("X-User-Id",    userId)
                     .header("X-Tenant-Id",  tenantId)
+                    .header("X-Tenant-Uid", tenantUid != null ? tenantUid : "")
                     .header("X-User-Tier",  tier != null ? tier : "")
                     .header("X-User-Roles", rolesHeader)
                     .build();

@@ -5,6 +5,7 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ratelimiter.gateway.model.RateLimitResult;
 import com.ratelimiter.gateway.model.RateLimitRule;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.event.EventListener;
 import org.springframework.boot.context.event.ApplicationReadyEvent;
 import lombok.RequiredArgsConstructor;
@@ -32,6 +33,17 @@ public class RateLimiterService {
     private final ReactiveRedisTemplate<String, String> redisTemplate;
 
     private final ObjectMapper objectMapper;
+
+    /**
+     * Limit applied when no rule matches the caller's tenant/tier. Previously an
+     * unmatched tenant was allowed through unlimited, which silently disabled rate
+     * limiting for any tenant whose rule was missing or misconfigured.
+     */
+    @Value("${ratelimit.default.request-limit:60}")
+    private int defaultRequestLimit;
+
+    @Value("${ratelimit.default.window-ms:60000}")
+    private long defaultWindowMs;
 
     private final Map<String, RateLimitRule> ruleCache = new ConcurrentHashMap<>();
 
@@ -108,14 +120,21 @@ public class RateLimiterService {
         RateLimitRule rule =
                 ruleCache.get(tenantId + ":" + tier);
 
+        String key = tenantId + ":" + userId;
+
         if (rule == null || !rule.isActive()) {
 
-            return Mono.just(
-                    new RateLimitResult(true, 100, 0)
+            log.debug(
+                    "No active rule for tenant={} tier={} — applying default limit of {} per {}ms",
+                    tenantId, tier, defaultRequestLimit, defaultWindowMs
+            );
+
+            return slidingWindowRateLimiter.checkLimit(
+                    key,
+                    defaultRequestLimit,
+                    defaultWindowMs
             );
         }
-
-        String key = tenantId + ":" + userId;
 
         if ("TOKEN_BUCKET".equalsIgnoreCase(rule.getAlgorithm())) {
 

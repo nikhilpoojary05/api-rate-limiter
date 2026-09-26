@@ -1,5 +1,5 @@
 server:
-  port: 8090
+  port: ${SERVER_PORT:8080}
 
 spring:
   application:
@@ -23,17 +23,26 @@ spring:
       port: ${REDIS_PORT:6379}
 
 jwt:
-  secret: ${JWT_SECRET:SuperSecretKeyForJwtSigningThatIsAtLeast256BitsLong!!}
+  # No default: the service must not start without an explicitly configured key.
+  secret: ${JWT_SECRET}
 
 management:
+  # Actuator runs on its own port, never published outside the Docker network.
+  # Spring Cloud Gateway's GlobalFilter does not apply to actuator endpoints, so
+  # the JWT filter cannot protect them — keeping them off the public port is the
+  # only reliable boundary.
+  server:
+    port: ${MANAGEMENT_PORT:9080}
+
   endpoints:
     web:
       exposure:
-        include: health,info,metrics,prometheus,gateway
+        # "gateway" deliberately excluded: it exposes route topology and supports writes
+        include: health,info,metrics,prometheus
 
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
 
   tracing:
     sampling:

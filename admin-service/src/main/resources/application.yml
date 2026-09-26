@@ -6,9 +6,9 @@ spring:
     name: admin-service
 
   datasource:
-    url: jdbc:postgresql://localhost:5432/ratelimiter_admin
-    username: postgres
-    password: <redacted>
+    url: ${SPRING_DATASOURCE_URL:jdbc:postgresql://localhost:5432/ratelimiter_admin}
+    username: ${POSTGRES_USER:postgres}
+    password: ${POSTGRES_PASSWORD}
 
   jpa:
     hibernate:
@@ -31,9 +31,17 @@ spring:
       fail-on-unknown-properties: false
 
 jwt:
-  secret: ${JWT_SECRET:SuperSecretKeyForJwtSigningThatIsAtLeast256BitsLong!!}
+  # No default: the service must not start without an explicitly configured key.
+  secret: ${JWT_SECRET}
 
 management:
+  # Actuator runs on its own port, never published outside the Docker network.
+  # Spring Cloud Gateway's GlobalFilter does not apply to actuator endpoints, so
+  # the JWT filter cannot protect them — keeping them off the public port is the
+  # only reliable boundary.
+  server:
+    port: ${MANAGEMENT_PORT:9082}
+
   endpoints:
     web:
       exposure:

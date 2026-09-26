@@ -6,13 +6,20 @@ spring:
     name: demo-service
 
 management:
+  # Actuator runs on its own port, never published outside the Docker network.
+  # Spring Cloud Gateway's GlobalFilter does not apply to actuator endpoints, so
+  # the JWT filter cannot protect them — keeping them off the public port is the
+  # only reliable boundary.
+  server:
+    port: ${MANAGEMENT_PORT:9083}
+
   endpoints:
     web:
       exposure:
         include: health,info
   endpoint:
     health:
-      show-details: always
+      show-details: when-authorized
 
 logging:
   level:
