@@ -27,4 +27,8 @@ public class RegisterRequest {
 
     @NotBlank(message = "Tenant ID is required")
     private String tenantId;
+
+    /** Proof that the caller is allowed to join this tenant. */
+    @NotBlank(message = "Registration code is required")
+    private String registrationCode;
 }

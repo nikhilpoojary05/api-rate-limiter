@@ -13,9 +13,13 @@ spring:
       globalcors:
         corsConfigurations:
           '[/**]':
-            allowedOrigins: "*"
-            allowedMethods: "*"
-            allowedHeaders: "*"
+            # Explicit origins, not "*": a wildcard cannot carry credentials and let
+            # any site on the internet call these endpoints.
+            allowedOrigins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
+            allowedMethods: [GET, POST, PUT, DELETE, OPTIONS]
+            allowedHeaders: [Authorization, Content-Type, Accept]
+            allowCredentials: true
+            maxAge: 3600
 
   data:
     redis:

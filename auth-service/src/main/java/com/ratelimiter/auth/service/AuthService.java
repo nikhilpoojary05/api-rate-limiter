@@ -19,6 +19,8 @@ import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.time.LocalDateTime;
 import java.util.HashSet;
 import java.util.Set;
@@ -36,6 +38,7 @@ public class AuthService {
     private final PasswordEncoder passwordEncoder;
     private final JwtUtils jwtUtils;
     private final RedisTemplate<String, String> redisTemplate;
+    private final RefreshTokenRevoker refreshTokenRevoker;
 
     private static final long REFRESH_TOKEN_EXPIRY_DAYS = 7;
     private static final String REDIS_REFRESH_PREFIX = "refresh:";
@@ -62,8 +65,10 @@ public class AuthService {
             throw new RuntimeException("Email is already in use");
         }
 
-        Tenant tenant = tenantRepository.findById(UUID.fromString(request.getTenantId()))
-        .orElseThrow(() -> new RuntimeException("Tenant not found: " + request.getTenantId()));
+        Tenant tenant = resolveTenantForRegistration(request);
+
+        // The tier is always the tenant's own. It is never read from the request —
+        // letting a caller name their tier would hand out whatever limit they asked for.
         Set<String> roles = new HashSet<>();
         roles.add("ROLE_USER");
 
@@ -81,6 +86,40 @@ public class AuthService {
         AppUser savedUser = userRepository.save(user);
         log.info("Registered user '{}' in tenant '{}'", savedUser.getUsername(), savedUser.getTenantId());
         return mapToUserDto(savedUser);
+    }
+
+    /**
+     * Registration used to accept any tenant id and copy that tenant's rate limit tier
+     * onto the new account, so anyone could register into a high-tier tenant and help
+     * themselves to its quota. Joining now requires the tenant's registration code.
+     *
+     * <p>Failures deliberately share one message: distinguishing "no such tenant" from
+     * "wrong code" would confirm which tenants exist.
+     */
+    private Tenant resolveTenantForRegistration(RegisterRequest request) {
+        Tenant tenant = null;
+        try {
+            tenant = tenantRepository.findById(UUID.fromString(request.getTenantId())).orElse(null);
+        } catch (IllegalArgumentException e) {
+            // Not a UUID — fall through to the same generic failure below.
+            log.debug("Registration attempted with a malformed tenant id");
+        }
+
+        boolean registrationOpen = tenant != null
+                && tenant.isActive()
+                && tenant.getRegistrationCode() != null
+                && !tenant.getRegistrationCode().isBlank();
+
+        if (!registrationOpen
+                || !MessageDigest.isEqual(
+                        tenant.getRegistrationCode().getBytes(StandardCharsets.UTF_8),
+                        request.getRegistrationCode().getBytes(StandardCharsets.UTF_8))) {
+            log.warn("Rejected registration for tenant '{}': unknown tenant or bad code",
+                    request.getTenantId());
+            throw new RuntimeException("Unknown tenant or invalid registration code");
+        }
+
+        return tenant;
     }
 
     @Transactional
@@ -116,24 +155,7 @@ public class AuthService {
             user.getRoles()
             );
 
-        // Opaque refresh token stored in DB + Redis
-        String refreshTokenStr = UUID.randomUUID().toString();
-        RefreshToken refreshToken = RefreshToken.builder()
-                .token(refreshTokenStr)
-                .userId(userId)
-                .tenantId(user.getTenantId().toString())    
-                .expiresAt(LocalDateTime.now().plusDays(REFRESH_TOKEN_EXPIRY_DAYS))
-                .revoked(false)
-                .build();
-        refreshTokenRepository.save(refreshToken);
-
-        // Redis TTL for instant-revocation support
-        redisTemplate.opsForValue().set(
-                REDIS_REFRESH_PREFIX + refreshTokenStr,
-                userId,
-                REFRESH_TOKEN_EXPIRY_DAYS,
-                TimeUnit.DAYS
-        );
+        String refreshTokenStr = issueRefreshToken(user);
 
         log.info("User '{}' logged in (tenant: {})", user.getUsername(), user.getTenantId());
 
@@ -144,23 +166,51 @@ public class AuthService {
                 .build();
     }
 
+    /**
+     * Rotates the refresh token on every use: the presented token is revoked and a new
+     * one issued. Without rotation a single stolen token stayed valid for its whole
+     * seven-day life no matter how often it was used.
+     *
+     * <p>Presenting a token that exists but is already revoked means either the
+     * legitimate holder or an attacker is replaying a spent token — and there is no way
+     * to tell which. Every outstanding token for that user is revoked, forcing a
+     * re-login.
+     */
     @Transactional
     public AuthResponse refresh(String refreshTokenStr) {
-        // Check Redis first (fast revocation check)
-        String cachedUserId = redisTemplate.opsForValue().get(REDIS_REFRESH_PREFIX + refreshTokenStr);
-        if (cachedUserId == null) {
+        if (refreshTokenStr == null || refreshTokenStr.isBlank()) {
             throw new RuntimeException("Invalid or expired refresh token");
         }
 
-        RefreshToken refreshToken = refreshTokenRepository.findByTokenAndRevokedFalse(refreshTokenStr)
-                .orElseThrow(() -> new RuntimeException("Refresh token not found or revoked"));
+        RefreshToken stored = refreshTokenRepository.findByToken(refreshTokenStr).orElse(null);
+
+        if (stored != null && stored.isRevoked()) {
+            // Committed in its own transaction: the throw below rolls this one back.
+            int revoked = refreshTokenRevoker.revokeAllForUser(stored.getUserId());
+            log.warn("Refresh token replay detected for userId={} — revoked {} outstanding tokens",
+                    stored.getUserId(), revoked);
+            throw new RuntimeException("Invalid or expired refresh token");
+        }
+
+        // Redis is the fast revocation check; the row above is the source of truth.
+        String cachedUserId = redisTemplate.opsForValue().get(REDIS_REFRESH_PREFIX + refreshTokenStr);
+        if (cachedUserId == null || stored == null) {
+            throw new RuntimeException("Invalid or expired refresh token");
+        }
+
+        RefreshToken refreshToken = stored;
 
         if (refreshToken.getExpiresAt().isBefore(LocalDateTime.now())) {
-            throw new RuntimeException("Refresh token has expired");
+            throw new RuntimeException("Invalid or expired refresh token");
         }
 
         AppUser user = userRepository.findById(Long.valueOf(refreshToken.getUserId()))
-                .orElseThrow(() -> new RuntimeException("User not found"));
+                .orElseThrow(() -> new RuntimeException("Invalid or expired refresh token"));
+
+        // Retire the presented token before handing out its replacement.
+        refreshTokenRepository.revokeByToken(refreshTokenStr);
+        redisTemplate.delete(REDIS_REFRESH_PREFIX + refreshTokenStr);
+        String rotated = issueRefreshToken(user);
 
         String newAccessToken = jwtUtils.generateAccessToken(
             String.valueOf(user.getId()),
@@ -173,9 +223,28 @@ public class AuthService {
 
         return AuthResponse.builder()
                 .accessToken(newAccessToken)
-                .refreshToken(refreshTokenStr)
+                .refreshToken(rotated)
                 .user(mapToUserDto(user))
                 .build();
+    }
+
+    /** Mints an opaque refresh token, recorded in the database and mirrored into Redis. */
+    private String issueRefreshToken(AppUser user) {
+        String token = UUID.randomUUID().toString();
+        String userId = String.valueOf(user.getId());
+
+        refreshTokenRepository.save(RefreshToken.builder()
+                .token(token)
+                .userId(userId)
+                .tenantId(user.getTenantId().toString())
+                .expiresAt(LocalDateTime.now().plusDays(REFRESH_TOKEN_EXPIRY_DAYS))
+                .revoked(false)
+                .build());
+
+        redisTemplate.opsForValue().set(
+                REDIS_REFRESH_PREFIX + token, userId, REFRESH_TOKEN_EXPIRY_DAYS, TimeUnit.DAYS);
+
+        return token;
     }
 
     private boolean isTemporarilyLocked(String username) {

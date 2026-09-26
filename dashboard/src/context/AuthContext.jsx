@@ -21,18 +21,16 @@ export function AuthProvider({ children }) {
 
   const login = async (credentials) => {
     const res = await authApi.login(credentials);
-    const { accessToken, refreshToken, ...userInfo } = res.data.data;
+    // The refresh token is deliberately not stored: it arrives as an HttpOnly cookie
+    // that this code cannot read, so an XSS cannot exfiltrate it.
+    const { accessToken, user: userInfo } = res.data.data;
     localStorage.setItem('access_token', accessToken);
-    localStorage.setItem('refresh_token', refreshToken);
     setUser(userInfo);
     return userInfo;
   };
 
   const logout = async () => {
-    const refreshToken = localStorage.getItem('refresh_token');
-    if (refreshToken) {
-      try { await authApi.logout(refreshToken); } catch {}
-    }
+    try { await authApi.logout(); } catch { /* clear local state regardless */ }
     localStorage.clear();
     setUser(null);
   };

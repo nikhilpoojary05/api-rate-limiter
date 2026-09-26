@@ -39,14 +39,23 @@ public class TokenBucketRateLimiter {
         this.tokenBucketScript = tokenBucketScript;
     }
 
+    /**
+     * @param refillPerSecond tokens added per second. The script works in seconds, so
+     *                        a per-window limit must be converted before it gets here.
+     * @param ttlMs           how long an idle bucket is kept.
+     */
     public Mono<RateLimitResult> checkLimit(
             String key,
             int capacity,
-            int refillRate,
-            long windowMs) {
+            double refillPerSecond,
+            long ttlMs) {
 
         String redisKey = "rl:tb:" + key;
         long now = System.currentTimeMillis();
+
+        // For a bucket, "reset" is when the next token becomes available — not the end
+        // of a window. This drives Retry-After, so an over-long value stalls clients.
+        long nextTokenMs = (long) Math.ceil(1000.0 / Math.max(refillPerSecond, 1e-9));
 
         return redisTemplate.execute(
                 tokenBucketScript,
@@ -54,8 +63,9 @@ public class TokenBucketRateLimiter {
                 List.of(
                         String.valueOf(now),
                         String.valueOf(capacity),
-                        String.valueOf(refillRate),
-                        String.valueOf(windowMs)
+                        // Locale.ROOT: a comma decimal separator would not parse in Lua
+                        String.format(java.util.Locale.ROOT, "%.6f", refillPerSecond),
+                        String.valueOf(ttlMs)
                 )
         )
         .next()
@@ -67,7 +77,7 @@ public class TokenBucketRateLimiter {
             return new RateLimitResult(
                     allowed,
                     remaining,
-                    now + windowMs
+                    now + nextTokenMs
             );
         })
         .onErrorResume(e -> {
@@ -81,7 +91,7 @@ public class TokenBucketRateLimiter {
             return Mono.just(
                     failOpen
                             ? new RateLimitResult(true, 1, 0)
-                            : new RateLimitResult(false, 0, now + windowMs)
+                            : new RateLimitResult(false, 0, now + nextTokenMs)
             );
         });
     }

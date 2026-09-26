@@ -164,11 +164,21 @@ public class RateLimiterService {
 
         if ("TOKEN_BUCKET".equalsIgnoreCase(rule.getAlgorithm())) {
 
+            // requestLimit is "requests per windowMs"; the bucket script refills per
+            // second. Passing the raw limit made a 10-per-minute rule refill at 10 per
+            // second — sixty times the configured rate.
+            double refillPerSecond = rule.getRequestLimit() / (rule.getWindowMs() / 1000.0);
+
+            // Keep the bucket alive at least long enough to refill from empty, so an
+            // idle caller does not come back to a full bucket.
+            long refillMs = (long) Math.ceil(rule.getBurstCapacity() / refillPerSecond * 1000.0);
+            long ttlMs = Math.max(rule.getWindowMs(), refillMs);
+
             return tokenBucketRateLimiter.checkLimit(
                     key,
                     rule.getBurstCapacity(),
-                    rule.getRequestLimit(),
-                    rule.getWindowMs()
+                    refillPerSecond,
+                    ttlMs
             );
 
         } else {

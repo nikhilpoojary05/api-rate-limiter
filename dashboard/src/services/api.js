@@ -1,8 +1,12 @@
 import axios from 'axios';
 
+// Everything goes through the gateway, which is what enforces authentication and
+// rate limiting. Talking to auth-service and admin-service directly bypassed both.
 const api = axios.create({
-  baseURL: '',
+  baseURL: '/api',
   timeout: 10000,
+  // Sends the HttpOnly refresh_token cookie.
+  withCredentials: true,
 });
 
 // Request interceptor: inject JWT
@@ -24,21 +28,19 @@ api.interceptors.response.use(
     const originalRequest = error.config;
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
-      const refreshToken = localStorage.getItem('refresh_token');
-      if (refreshToken) {
-        try {
-          const res = await axios.post(`/auth/refresh?refreshToken=${refreshToken}`);
-          const newToken = res.data.data?.accessToken;
-          if (newToken) {
-            localStorage.setItem('access_token', newToken);
-            originalRequest.headers.Authorization = `Bearer ${newToken}`;
-            return api(originalRequest);
-          }
-        } catch {
-          localStorage.clear();
-          window.location.href = '/login';
+      // The refresh token lives in an HttpOnly cookie, so it is not read here and is
+      // never placed in a URL — it used to be a query parameter, which leaks it into
+      // access logs, browser history and Referer headers.
+      try {
+        const res = await api.post('/auth/refresh', {});
+        const newToken = res.data.data?.accessToken;
+        if (newToken) {
+          localStorage.setItem('access_token', newToken);
+          originalRequest.headers.Authorization = `Bearer ${newToken}`;
+          return api(originalRequest);
         }
-      } else {
+        throw new Error('No access token in refresh response');
+      } catch {
         localStorage.clear();
         window.location.href = '/login';
       }
@@ -50,7 +52,7 @@ api.interceptors.response.use(
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 export const authApi = {
   login: (data) => api.post('/auth/login', data),
-  logout: (refreshToken) => api.post(`/auth/logout?refreshToken=${refreshToken}`),
+  logout: () => api.post('/auth/logout', {}),
   me: () => api.get('/auth/me'),
 };
 
