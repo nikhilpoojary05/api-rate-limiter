@@ -134,13 +134,44 @@ public class JwtUtils {
         return parseToken(token).get("tier", String.class);
     }
 
-    @SuppressWarnings("unchecked")
     public List<String> extractRoles(String token) {
-        Object roles = parseToken(token).get("roles");
-        if (roles instanceof List<?>) {
-            return (List<String>) roles;
+        return rolesOf(parseToken(token));
+    }
+
+    private static List<String> rolesOf(Claims claims) {
+        Object roles = claims.get("roles");
+        if (roles instanceof List<?> list) {
+            return list.stream().map(String::valueOf).toList();
         }
         return Collections.emptyList();
+    }
+
+    /** Every claim the services read from an access token, taken from one verified parse. */
+    public record VerifiedToken(String userId, String username, String tenantId, String tenantUid,
+                                String tier, List<String> roles, String type) {
+    }
+
+    /**
+     * Verifies the signature and expiry once and returns every claim.
+     *
+     * <p>Use this on request paths instead of {@link #validateToken} followed by the
+     * {@code extract*} methods: each of those re-parses the token and re-checks the HMAC,
+     * so a filter that validated and then read five claims did the work six times. Under
+     * load that was about a fifth of the gateway's CPU.
+     *
+     * @throws io.jsonwebtoken.JwtException if the token is malformed, forged or expired
+     * @throws IllegalArgumentException     if the token is null or empty
+     */
+    public VerifiedToken verify(String token) {
+        Claims claims = parseToken(token);
+        return new VerifiedToken(
+                claims.getSubject(),
+                claims.get("username", String.class),
+                claims.get("tenant_id", String.class),
+                claims.get("tenant_uid", String.class),
+                claims.get("tier", String.class),
+                rolesOf(claims),
+                claims.get("type", String.class));
     }
 
     public boolean isRefreshToken(String token) {

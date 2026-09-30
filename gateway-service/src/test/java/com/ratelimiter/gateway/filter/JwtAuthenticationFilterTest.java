@@ -18,6 +18,10 @@ import java.util.List;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.spy;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 
 /**
  * The gateway is the only place identity headers are set, and downstream services trust
@@ -166,5 +170,24 @@ class JwtAuthenticationFilterTest {
         MockServerWebExchange exchange = run(MockServerHttpRequest.get("/actuator/prometheus").build());
         assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
         assertThat(forwarded.get()).isNull();
+    }
+
+    /**
+     * Performance regression guard. The filter used to validate the token and then call
+     * five extract* methods, each re-parsing it: six HMAC verifications per request, which
+     * profiling put at about a fifth of the gateway's CPU. One is enough.
+     */
+    @Test
+    @DisplayName("an authenticated request parses the token exactly once")
+    void parsesTokenOnce() {
+        JwtUtils counting = spy(jwtUtils);
+        filter = new JwtAuthenticationFilter(counting);
+        String jwt = token(jwtUtils, "acme-corp", List.of("ROLE_USER"));
+
+        run(MockServerHttpRequest.get("/api/demo/ping")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwt).build());
+
+        assertThat(forwarded.get()).isNotNull();
+        verify(counting, times(1)).parseToken(anyString());
     }
 }

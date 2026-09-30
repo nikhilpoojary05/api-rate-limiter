@@ -110,4 +110,37 @@ class JwtUtilsTest {
 
         assertThat(utils.validateToken(token)).isFalse();
     }
+
+    @Test
+    @DisplayName("verify returns every claim from a single parse")
+    void verifyReturnsAllClaims() {
+        JwtUtils utils = withSecret(STRONG);
+        String token = utils.generateAccessToken("42", "alice", "acme-corp",
+                "11111111-1111-1111-1111-111111111111", "TIER_A", List.of("ROLE_USER", "ROLE_ADMIN"));
+
+        JwtUtils.VerifiedToken v = utils.verify(token);
+
+        assertThat(v.userId()).isEqualTo("42");
+        assertThat(v.username()).isEqualTo("alice");
+        assertThat(v.tenantId()).isEqualTo("acme-corp");
+        assertThat(v.tenantUid()).isEqualTo("11111111-1111-1111-1111-111111111111");
+        assertThat(v.tier()).isEqualTo("TIER_A");
+        assertThat(v.roles()).containsExactly("ROLE_USER", "ROLE_ADMIN");
+        assertThat(v.type()).isEqualTo("ACCESS");
+    }
+
+    @Test
+    @DisplayName("verify throws for forged, expired and empty tokens")
+    void verifyRejectsBadTokens() {
+        JwtUtils utils = withSecret(STRONG);
+        String forged = withSecret("another-key-entirely-and-also-over-32-bytes")
+                .generateAccessToken("1", "m", "acme-corp", "x", "TIER_A", List.of("ROLE_SUPER_ADMIN"));
+        JwtUtils expiring = withSecret(STRONG);
+        ReflectionTestUtils.setField(expiring, "accessTokenExpiryMs", -1_000L);
+        String expired = expiring.generateAccessToken("1", "a", "acme-corp", "x", "TIER_A", List.of());
+
+        assertThatThrownBy(() -> utils.verify(forged)).isInstanceOf(io.jsonwebtoken.JwtException.class);
+        assertThatThrownBy(() -> utils.verify(expired)).isInstanceOf(io.jsonwebtoken.ExpiredJwtException.class);
+        assertThatThrownBy(() -> utils.verify("")).isInstanceOf(IllegalArgumentException.class);
+    }
 }
