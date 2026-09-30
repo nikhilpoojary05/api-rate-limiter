@@ -19,6 +19,14 @@ Get-Content $envFile | ForEach-Object {
         Set-Item -Path "env:$($Matches[1])" -Value $Matches[2].Trim()
     }
 }
+# .env is written for the Docker Compose network, where Redis is the host "redis".
+# This script runs everything on this machine, so point the services at localhost.
+$env:REDIS_HOST = "localhost"
+
+# The gateway defaults to 8080, which other software often holds (Oracle Database's
+# listener, for one). Set GATEWAY_PORT in .env to move it.
+$GATEWAY_PORT = if ($env:GATEWAY_PORT) { [int]$env:GATEWAY_PORT } else { 8080 }
+
 foreach ($required in @("JWT_SECRET", "POSTGRES_PASSWORD")) {
     if (-not (Get-Item "env:$required" -ErrorAction SilentlyContinue)) {
         Write-Host "$required is not set in .env" -ForegroundColor Red
@@ -84,18 +92,35 @@ $psql = 'C:\Program Files\PostgreSQL\18\bin\psql.exe'
 & $psql -U postgres -c "CREATE DATABASE ratelimiter_admin;" 2>&1 | Out-Null
 Write-Host "      Databases ready (ratelimiter_auth, ratelimiter_admin)." -ForegroundColor Green
 
-# ── Step 4: Stop any previously running services on target ports ─────────────
-Write-Host "[4/5] Freeing ports 8080, 8081, 8082, 8083..." -ForegroundColor Yellow
-@(8081, 8082, 8083, 8080) | ForEach-Object {
-    $port = $_
-    $pids = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess
-    $pids | Where-Object { $_ -gt 0 } | ForEach-Object {
-        Write-Host "      Killing process $_ on port $port" -ForegroundColor DarkGray
-        Stop-Process -Id $_ -Force -ErrorAction SilentlyContinue
+# ── Step 4: Free the ports — but only from a previous run of this project ─────
+# This used to kill whatever was listening on these ports. That includes software
+# unrelated to this project, such as Oracle's TNS listener on 8080. Now only a java
+# process running one of this repo's jars is stopped; anything else stops the script.
+Write-Host "[4/5] Checking ports $GATEWAY_PORT, 8081, 8082, 8083..." -ForegroundColor Yellow
+$blocked = @()
+foreach ($port in @(8081, 8082, 8083, $GATEWAY_PORT)) {
+    $owners = (Get-NetTCPConnection -LocalPort $port -State Listen -ErrorAction SilentlyContinue).OwningProcess |
+        Where-Object { $_ -gt 0 } | Sort-Object -Unique
+    foreach ($owner in $owners) {
+        $proc = Get-CimInstance Win32_Process -Filter "ProcessId=$owner" -ErrorAction SilentlyContinue
+        if ($proc -and $proc.Name -like "java*" -and
+            $proc.CommandLine -match "(auth|admin|demo|gateway)-service-[\d.]+\.jar") {
+            Write-Host "      Stopping previous $($Matches[1])-service (pid $owner) on port $port" -ForegroundColor DarkGray
+            Stop-Process -Id $owner -Force -ErrorAction SilentlyContinue
+        } else {
+            $name = if ($proc) { $proc.Name } else { "an unknown process" }
+            $blocked += "Port $port is in use by $name (pid $owner)."
+        }
     }
 }
+if ($blocked.Count -gt 0) {
+    $blocked | ForEach-Object { Write-Host "      $_" -ForegroundColor Red }
+    Write-Host "      This script only stops services it started. Free the port, or for the" -ForegroundColor Red
+    Write-Host "      gateway set GATEWAY_PORT in .env." -ForegroundColor Red
+    exit 1
+}
 Start-Sleep 2
-Write-Host "      Ports cleared." -ForegroundColor Green
+Write-Host "      Ports free." -ForegroundColor Green
 
 # ── Step 5: Launch all services ───────────────────────────────────────────────
 Write-Host "[5/5] Starting services..." -ForegroundColor Yellow
@@ -131,17 +156,22 @@ Start-Service -Name "admin-service" `
 
 Start-Sleep 3
 
-# Launch Demo Service
+# Launch Demo Service. Its endpoints only exist under the "demo" profile, so set it
+# for this one process and clear it before launching anything else.
+$env:SPRING_PROFILES_ACTIVE = "demo"
 Start-Service -Name "demo-service" `
     -JarPath "$ROOT\demo-service\target\demo-service-1.0.0.jar" `
     -Port 8083
+Remove-Item env:SPRING_PROFILES_ACTIVE
 
 Start-Sleep 2
 
 # Launch Gateway Service (last — it needs all upstream services)
+$env:SERVER_PORT = "$GATEWAY_PORT"
 Start-Service -Name "gateway-service" `
     -JarPath "$ROOT\gateway-service\target\gateway-service-1.0.0.jar" `
-    -Port 8080
+    -Port $GATEWAY_PORT
+Remove-Item env:SERVER_PORT
 
 Write-Host ""
 Write-Host "========================================" -ForegroundColor Cyan
@@ -155,7 +185,7 @@ $services = @(
     @{ Name="Auth Service";    Url="http://localhost:9081/actuator/health"; Port=8081 },
     @{ Name="Admin Service";   Url="http://localhost:9082/actuator/health"; Port=8082 },
     @{ Name="Demo Service";    Url="http://localhost:9083/actuator/health"; Port=8083 },
-    @{ Name="Gateway Service"; Url="http://localhost:9080/actuator/health"; Port=8080 }
+    @{ Name="Gateway Service"; Url="http://localhost:9080/actuator/health"; Port=$GATEWAY_PORT }
 )
 
 $maxWait = 90   # seconds
@@ -203,13 +233,13 @@ if ($allUp) {
 
 Write-Host ""
 Write-Host "  Service URLs:" -ForegroundColor Cyan
-Write-Host "    Gateway (main entry):  http://localhost:8080"
+Write-Host "    Gateway (main entry):  http://localhost:$GATEWAY_PORT"
 Write-Host "    Auth Service:          http://localhost:8081/swagger-ui.html"
 Write-Host "    Admin Service:         http://localhost:8082/swagger-ui.html"
 Write-Host "    Demo Service:          http://localhost:8083/actuator/health"
 Write-Host ""
 Write-Host "  Test login:" -ForegroundColor Cyan
-Write-Host '    Invoke-RestMethod http://localhost:8080/api/auth/login -Method POST -ContentType "application/json" -Body ' + "'" + '{"username":"admin","password":"Admin@123!","tenantId":"acme-corp"}' + "'"
+Write-Host ("    Invoke-RestMethod http://localhost:$GATEWAY_PORT/api/auth/login -Method POST -ContentType application/json -Body '" + '{"username":"admin","password":"Admin@123!"}' + "'")
 Write-Host ""
 Write-Host "  Logs directory: $ROOT\logs\" -ForegroundColor DarkGray
 Write-Host ""

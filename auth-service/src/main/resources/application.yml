@@ -32,6 +32,13 @@ spring:
       host: localhost
       port: 6379
 
+auth:
+  cookie:
+    # The refresh token cookie. Must be true wherever TLS terminates, otherwise the
+    # cookie is sent in the clear. Left false so plain-http local development works.
+    secure: ${AUTH_COOKIE_SECURE:false}
+    path: ${AUTH_COOKIE_PATH:/}
+
 jwt:
   # No default: the service must not start without an explicitly configured key.
   secret: ${JWT_SECRET}

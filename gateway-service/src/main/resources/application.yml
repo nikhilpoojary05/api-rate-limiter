@@ -26,6 +26,12 @@ spring:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
 
+security:
+  hsts:
+    # Enable together with TLS termination. Turning this on over plain http locks
+    # browsers out of the host.
+    enabled: ${SECURITY_HSTS_ENABLED:false}
+
 jwt:
   # No default: the service must not start without an explicitly configured key.
   secret: ${JWT_SECRET}
