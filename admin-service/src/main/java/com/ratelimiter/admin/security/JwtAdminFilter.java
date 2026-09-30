@@ -50,23 +50,21 @@ public class JwtAdminFilter extends OncePerRequestFilter {
 
         if (StringUtils.hasText(token)) {
             try {
-                if (jwtUtils.validateToken(token)) {
-                    String userId   = jwtUtils.extractUserId(token);
-                    String tenantId = jwtUtils.extractTenantId(token);
-                    Set<String> roles = new LinkedHashSet<>(jwtUtils.extractRoles(token));
+                // Single parse; see JwtUtils.verify. An invalid token throws and is
+                // handled below, leaving the request unauthenticated.
+                JwtUtils.VerifiedToken verified = jwtUtils.verify(token);
+                Set<String> roles = new LinkedHashSet<>(verified.roles());
 
-                    List<SimpleGrantedAuthority> authorities = roles.stream()
-                            .map(SimpleGrantedAuthority::new)
-                            .collect(Collectors.toList());
+                List<SimpleGrantedAuthority> authorities = roles.stream()
+                        .map(SimpleGrantedAuthority::new)
+                        .collect(Collectors.toList());
 
-                    AdminPrincipal principal = new AdminPrincipal(userId, tenantId, roles);
+                AdminPrincipal principal = new AdminPrincipal(verified.userId(), verified.tenantId(), roles);
 
-                    UsernamePasswordAuthenticationToken auth =
-                            new UsernamePasswordAuthenticationToken(principal, null, authorities);
-                    SecurityContextHolder.getContext().setAuthentication(auth);
+                SecurityContextHolder.getContext().setAuthentication(
+                        new UsernamePasswordAuthenticationToken(principal, null, authorities));
 
-                    log.debug("Admin JWT validated for userId={} tenant={}", userId, tenantId);
-                }
+                log.debug("Admin JWT validated for userId={} tenant={}", verified.userId(), verified.tenantId());
             } catch (Exception e) {
                 log.warn("Admin JWT validation failed: {}", e.getMessage());
                 SecurityContextHolder.clearContext();
