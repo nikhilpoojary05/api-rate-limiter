@@ -154,8 +154,8 @@ killing it.
 
 - The gateway uses port 8080 unless `GATEWAY_PORT` is set in `.env`. Oracle Database's
   listener, among others, often holds 8080.
-- It assumes the repo is at `C:\api-rate-limiter` and PostgreSQL 18 is in its default install
-  path; edit the paths at the top of the script if not.
+- It runs from wherever the repo is checked out, but assumes PostgreSQL 18 is in its default
+  install path; edit that path near the top of the script if not.
 - If your local Redis has a password, add `SPRING_DATA_REDIS_PASSWORD` to `.env`.
 
 ### 3. Dashboard

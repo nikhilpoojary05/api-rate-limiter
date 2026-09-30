@@ -5,7 +5,10 @@
 # ============================================================
 
 $ErrorActionPreference = "Continue"
-$ROOT = "C:\api-rate-limiter"
+# The folder this script lives in, so the project runs from wherever it is checked
+# out. This used to be hardcoded to C:\api-rate-limiter: a copy elsewhere silently
+# started the C: copy's jars with the C: copy's .env.
+$ROOT = $PSScriptRoot
 $JAVA = "java"
 $JVM_OPTS = "-Xms256m -Xmx512m"
 # Secrets are read from .env (gitignored), never hardcoded here.
