@@ -2,6 +2,7 @@ package com.ratelimiter.gateway.ratelimit;
 
 import com.ratelimiter.gateway.model.RateLimitResult;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.ReactiveRedisTemplate;
@@ -9,6 +10,7 @@ import org.springframework.data.redis.core.script.RedisScript;
 import org.springframework.stereotype.Service;
 import reactor.core.publisher.Mono;
 
+import java.time.Clock;
 import java.util.Collections;
 import java.util.List;
 
@@ -28,6 +30,9 @@ public class TokenBucketRateLimiter {
     @Value("${ratelimit.fail-open:false}")
     private boolean failOpen;
 
+    private final Clock clock;
+
+    @Autowired
     public TokenBucketRateLimiter(
             @Qualifier("reactiveRedisTemplate")
             ReactiveRedisTemplate<String, String> redisTemplate,
@@ -35,8 +40,16 @@ public class TokenBucketRateLimiter {
             @Qualifier("tokenBucketScript")
             RedisScript<List> tokenBucketScript) {
 
+        this(redisTemplate, tokenBucketScript, Clock.systemUTC());
+    }
+
+    /** Tests drive the clock to check refill arithmetic without sleeping. */
+    TokenBucketRateLimiter(ReactiveRedisTemplate<String, String> redisTemplate,
+                           RedisScript<List> tokenBucketScript,
+                           Clock clock) {
         this.redisTemplate = redisTemplate;
         this.tokenBucketScript = tokenBucketScript;
+        this.clock = clock;
     }
 
     /**
@@ -51,7 +64,7 @@ public class TokenBucketRateLimiter {
             long ttlMs) {
 
         String redisKey = "rl:tb:" + key;
-        long now = System.currentTimeMillis();
+        long now = clock.millis();
 
         // For a bucket, "reset" is when the next token becomes available — not the end
         // of a window. This drives Retry-After, so an over-long value stalls clients.
