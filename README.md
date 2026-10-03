@@ -58,8 +58,9 @@ For each request the gateway:
 2. **Sets identity headers** — `X-Tenant-Id`, `X-User-Id`, `X-User-Roles` — from the token,
    discarding any the client sent. Downstream services trust these, so only the gateway may
    set them.
-3. **Looks up the rule** for `tenant:tier`, published to Redis by the admin service and
-   refreshed every 30 s.
+3. **Looks up the rule** for `tenant:tier`. The admin service publishes rules from
+   PostgreSQL to Redis on startup, on every change and every 60 s after that, so a fresh or
+   flushed Redis recovers by itself; the gateway reloads them every 30 s.
 4. **Runs the limiter as a single Lua script**, so check-and-increment is atomic: concurrent
    requests cannot all see "under the limit" and all get in.
 5. Returns `429 Too Many Requests` with `Retry-After`, or proxies the request.
@@ -131,9 +132,13 @@ Postgres creates both application databases on first start
 ([`docker/postgres-init`](docker/postgres-init)). If you change that script, recreate the
 volume with `docker compose down -v`.
 
-> The Compose configuration has been validated (it parses, and only the gateway is
-> published), but it has **not been run end to end**: it was developed on a machine without
-> Docker, using the local route below.
+This starts all nine containers: the four services, PostgreSQL, Redis, Prometheus, Grafana
+and Zipkin. The gateway is published on port 8080; Postgres, Redis and the monitoring tools
+are published on loopback only.
+
+If a local Postgres, Redis or another program already holds one of those ports, set
+`GATEWAY_PORT`, `POSTGRES_HOST_PORT` or `REDIS_HOST_PORT` in `.env`. The containers keep
+using the standard ports among themselves.
 
 ### 2b. Local, on Windows (how this was developed)
 

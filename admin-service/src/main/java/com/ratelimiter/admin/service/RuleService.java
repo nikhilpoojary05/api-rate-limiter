@@ -9,6 +9,7 @@ import com.ratelimiter.admin.security.TenantAccess;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -84,6 +85,22 @@ public class RuleService {
     public void publishAllRulesRequested() {
         tenantAccess.requireSuperAdmin();
         publishAllRulesToRedis();
+    }
+
+    /**
+     * The gateway reads rules only from Redis, and they used to be written there only
+     * when a rule changed. A fresh Redis (new machine, new container) or an evicted key
+     * (Redis runs allkeys-lru in Compose) therefore silently dropped every tenant to the
+     * default limit. Republishing from the database on a timer covers startup, a flushed
+     * Redis and eviction alike.
+     */
+    @Scheduled(initialDelay = 0, fixedDelayString = "${ratelimit.rules.republish-ms:60000}")
+    public void republishRules() {
+        try {
+            publishAllRulesToRedis();
+        } catch (RuntimeException e) {
+            log.error("Scheduled rule publish failed; retrying on the next run", e);
+        }
     }
 
     public void publishAllRulesToRedis() {

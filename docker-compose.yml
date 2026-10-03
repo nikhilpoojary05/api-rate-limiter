@@ -18,7 +18,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER must be set in .env}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD must be set in .env}
     ports:
-      - "127.0.0.1:5432:5432"   # loopback only — not reachable off-host
+      - "127.0.0.1:${POSTGRES_HOST_PORT:-5432}:5432"   # loopback only — not reachable off-host
     volumes:
       - postgres-data:/var/lib/postgresql/data
       # Runs only when the volume is empty: docker compose down -v to re-run.
@@ -45,7 +45,7 @@ services:
     environment:
       REDIS_PASSWORD: ${REDIS_PASSWORD}
     ports:
-      - "127.0.0.1:6379:6379"   # loopback only — not reachable off-host
+      - "127.0.0.1:${REDIS_HOST_PORT:-6379}:6379"   # loopback only — not reachable off-host
     volumes:
       - redis-data:/data
     healthcheck:
@@ -71,7 +71,7 @@ services:
     environment:
       - STORAGE_TYPE=mem
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9411/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9411/health || exit 1"]
       interval: 15s
       timeout: 5s
       retries: 5
@@ -171,7 +171,7 @@ services:
       redis:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9081/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9081/actuator/health || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
@@ -209,7 +209,7 @@ services:
       auth-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9082/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9082/actuator/health || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
@@ -229,7 +229,7 @@ services:
     container_name: rl-gateway-service
     restart: unless-stopped
     ports:
-      - "8080:8080"
+      - "${GATEWAY_PORT:-8080}:8080"
     environment:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
@@ -249,7 +249,7 @@ services:
       admin-service:
         condition: service_healthy
     healthcheck:
-      test: ["CMD-SHELL", "curl -f http://localhost:9080/actuator/health || exit 1"]
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://localhost:9080/actuator/health || exit 1"]
       interval: 20s
       timeout: 10s
       retries: 5
