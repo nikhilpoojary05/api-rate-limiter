@@ -1,0 +1,32 @@
+# Three gateway instances behind nginx, sharing one Redis. Shows the limits hold across
+# instances, which is the point of keeping limiter state in Redis:
+#
+#   docker compose -f docker-compose.yml -f docker-compose.distributed.yml up -d --build
+#
+# The gateway is reached through nginx on the same port as usual (GATEWAY_PORT).
+
+services:
+  gateway-service:
+    # Replicas cannot share a container name or a host port; nginx publishes the port.
+    container_name: !reset null
+    ports: !reset []
+    deploy:
+      replicas: 3
+    environment:
+      # Every request now arrives from nginx, so without this all clients would share
+      # nginx's IP, and with it one per-IP login limit. Trusting X-Forwarded-For is safe
+      # here only because the gateways are not published: nginx is the only way in,
+      # and it overwrites the header.
+      SERVER_FORWARD_HEADERS_STRATEGY: native
+
+  gateway-lb:
+    image: nginx:1.27-alpine
+    container_name: rl-gateway-lb
+    restart: unless-stopped
+    ports:
+      - "${GATEWAY_PORT:-8080}:8080"
+    volumes:
+      - ./docker/nginx/gateway-lb.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      gateway-service:
+        condition: service_healthy

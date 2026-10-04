@@ -9,12 +9,14 @@ administrators a tenant-scoped admin API and a React dashboard with live traffic
 
 - **Exact enforcement under concurrency.** 15,000 requests from 50 users at concurrency 200:
   every user was admitted exactly their limit, for both algorithms — 0 of 50 off by even one.
+- **Exact across instances.** The same test through nginx in front of three gateway
+  replicas sharing one Redis: still 0 of 50 users off-limit, for both algorithms.
 - **~4,700 req/s** through the full gateway path on a single laptop (i5-13420H), p50 3.4 ms
   at concurrency 16. Laptop numbers: generator, gateway, upstream and Redis share one CPU.
 - **Profiled and tuned.** A Java Flight Recorder profile showed each JWT was verified six
   times per request; verifying once cut its CPU share from 23% to 10% and raised
   throughput 8% in a controlled A/B test.
-- **77 tests**, including concurrency tests that were deliberately broken to confirm they fail.
+- **80 tests**, including concurrency tests that were deliberately broken to confirm they fail.
 
 ---
 
@@ -59,10 +61,12 @@ For each request the gateway:
    discarding any the client sent. Downstream services trust these, so only the gateway may
    set them.
 3. **Looks up the rule** for `tenant:tier`. The admin service publishes rules from
-   PostgreSQL to Redis on startup, on every change and every 60 s after that, so a fresh or
-   flushed Redis recovers by itself; the gateway reloads them every 30 s.
+   PostgreSQL to Redis on startup and on every change, and restores them within a minute
+   if Redis loses them; the gateway reloads them every 30 s.
 4. **Runs the limiter as a single Lua script**, so check-and-increment is atomic: concurrent
-   requests cannot all see "under the limit" and all get in.
+   requests cannot all see "under the limit" and all get in. The script takes the time
+   from Redis (`TIME`), not from the gateway, so several gateway instances on different
+   servers agree on the window even when their clocks drift.
 5. Returns `429 Too Many Requests` with `Retry-After`, or proxies the request.
 
 **Sliding window** — a sorted set per `tenant:user`, scored by timestamp. Each entry's member
@@ -139,6 +143,13 @@ are published on loopback only.
 If a local Postgres, Redis or another program already holds one of those ports, set
 `GATEWAY_PORT`, `POSTGRES_HOST_PORT` or `REDIS_HOST_PORT` in `.env`. The containers keep
 using the standard ports among themselves.
+
+To run **three gateway instances behind nginx**, all sharing one Redis, add the
+distributed file. The gateway is still reached on the same port, now through nginx:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.distributed.yml up -d --build
+```
 
 ### 2b. Local, on Windows (how this was developed)
 
@@ -247,11 +258,13 @@ Gateway properties:
 mvn test
 ```
 
-77 tests across `common`, `gateway-service` and `admin-service`:
+80 tests across `common`, `gateway-service` and `admin-service`:
 
 - **Limiters against a real Redis** — exact limits, window sliding, refill at the configured
   rate, capacity caps, and 300 concurrent requests in a single frozen millisecond admitting
   exactly the limit. Time is driven by an injectable clock, so nothing sleeps.
+- **Several instances** — gateways whose clocks disagree over-admit when each passes its
+  own time; on Redis's clock, three instances admit exactly the limit between them.
 - **Failure handling** — both limiters deny when Redis is unreachable.
 - **Identity** — forged and expired tokens rejected, client-supplied identity headers
   discarded, one JWT parse per request.

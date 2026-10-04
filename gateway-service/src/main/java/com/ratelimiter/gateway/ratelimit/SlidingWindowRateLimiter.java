@@ -31,6 +31,10 @@ public class SlidingWindowRateLimiter {
     @Value("${ratelimit.fail-open:false}")
     private boolean failOpen;
 
+    /**
+     * Null in production: the scripts then read Redis's clock, so every gateway instance
+     * measures time the same way. Tests pass a clock to control time.
+     */
     private final Clock clock;
 
     @Autowired
@@ -41,7 +45,7 @@ public class SlidingWindowRateLimiter {
             @Qualifier("slidingWindowScript")
             RedisScript<List> slidingWindowScript) {
 
-        this(redisTemplate, slidingWindowScript, Clock.systemUTC());
+        this(redisTemplate, slidingWindowScript, null);
     }
 
     /** Tests pin the clock so concurrent requests genuinely share a millisecond. */
@@ -59,13 +63,13 @@ public class SlidingWindowRateLimiter {
             long windowMs) {
 
         String redisKey = "rl:sw:" + key;
-        long now = clock.millis();
+        long requestedNow = clock != null ? clock.millis() : 0;  // 0 = Redis TIME
 
         return redisTemplate.execute(
                 slidingWindowScript,
                 Collections.singletonList(redisKey),
                 List.of(
-                        String.valueOf(now),
+                        String.valueOf(requestedNow),
                         String.valueOf(windowMs),
                         String.valueOf(limit),
                         UUID.randomUUID().toString()
@@ -76,6 +80,7 @@ public class SlidingWindowRateLimiter {
 
             boolean allowed = ((Long) result.get(0)) == 1L;
             int remaining = ((Long) result.get(1)).intValue();
+            long now = (Long) result.get(2);  // the time the script actually used
 
             return new RateLimitResult(
                     allowed,
@@ -84,6 +89,8 @@ public class SlidingWindowRateLimiter {
             );
         })
         .onErrorResume(e -> {
+
+            long now = clock != null ? clock.millis() : System.currentTimeMillis();
 
             log.error(
                     "Redis script error in SlidingWindowRateLimiter — failing {}",

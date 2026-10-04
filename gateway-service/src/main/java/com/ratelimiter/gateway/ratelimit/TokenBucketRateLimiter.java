@@ -30,6 +30,10 @@ public class TokenBucketRateLimiter {
     @Value("${ratelimit.fail-open:false}")
     private boolean failOpen;
 
+    /**
+     * Null in production: the scripts then read Redis's clock, so every gateway instance
+     * measures time the same way. Tests pass a clock to control time.
+     */
     private final Clock clock;
 
     @Autowired
@@ -40,7 +44,7 @@ public class TokenBucketRateLimiter {
             @Qualifier("tokenBucketScript")
             RedisScript<List> tokenBucketScript) {
 
-        this(redisTemplate, tokenBucketScript, Clock.systemUTC());
+        this(redisTemplate, tokenBucketScript, null);
     }
 
     /** Tests drive the clock to check refill arithmetic without sleeping. */
@@ -64,7 +68,7 @@ public class TokenBucketRateLimiter {
             long ttlMs) {
 
         String redisKey = "rl:tb:" + key;
-        long now = clock.millis();
+        long requestedNow = clock != null ? clock.millis() : 0;  // 0 = Redis TIME
 
         // For a bucket, "reset" is when the next token becomes available — not the end
         // of a window. This drives Retry-After, so an over-long value stalls clients.
@@ -74,7 +78,7 @@ public class TokenBucketRateLimiter {
                 tokenBucketScript,
                 Collections.singletonList(redisKey),
                 List.of(
-                        String.valueOf(now),
+                        String.valueOf(requestedNow),
                         String.valueOf(capacity),
                         // Locale.ROOT: a comma decimal separator would not parse in Lua
                         String.format(java.util.Locale.ROOT, "%.6f", refillPerSecond),
@@ -86,6 +90,7 @@ public class TokenBucketRateLimiter {
 
             boolean allowed = ((Long) result.get(0)) == 1L;
             int remaining = ((Long) result.get(1)).intValue();
+            long now = (Long) result.get(2);  // the time the script actually used
 
             return new RateLimitResult(
                     allowed,
@@ -94,6 +99,8 @@ public class TokenBucketRateLimiter {
             );
         })
         .onErrorResume(e -> {
+
+            long now = clock != null ? clock.millis() : System.currentTimeMillis();
 
             log.error(
                     "Redis script error in TokenBucketRateLimiter — failing {}",

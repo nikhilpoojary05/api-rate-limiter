@@ -50,6 +50,38 @@ user's requests race both each other and everyone else's.
 
 Identical result before and after the change below, and in every run so far.
 
+### Across three gateway instances
+
+The same test through nginx in front of **three gateway replicas** sharing one Redis
+([`docker-compose.distributed.yml`](../docker-compose.distributed.yml)), measured
+2026-10-04. nginx spread the requests evenly (10,707 / 10,710 / 10,707 per instance), so
+every user's requests were split across all three.
+
+| Algorithm | Limit / user | Requests | Admitted per user | Users off-limit |
+|---|---:|---:|---|---:|
+| Sliding window | 100 | 15,000 | min 100, max 100 | **0 of 50** |
+| Token bucket | 20 | 15,000 | min 20, max 20 | **0 of 50** |
+
+Same result in two consecutive runs. Getting there needed three fixes:
+
+- **One clock.** Each instance passed its own time to the Lua scripts, so on separate
+  servers clock skew would break the limit: an instance running a window ahead trims
+  every entry the others just added. The scripts now read Redis's `TIME`.
+  `RedisClockTest` shows two instances with disagreeing clocks admitting twice the limit
+  under the old scheme, and three instances on Redis's clock admitting exactly the limit.
+  (All replicas here share one host clock, so this run could not have exposed skew.)
+- **Rules not overwritten mid-run.** The admin service republished rules from the
+  database every 60 s, wiping the temporary rules this tool installs; the first
+  three-instance run admitted the 60/min default to every user. It now restores the
+  rules only when Redis has lost them.
+- **Readiness checked on every instance.** One passing probe proves only the instance
+  that served it, and each instance refreshes rules on its own schedule. The tool now
+  waits for ten consecutive passes.
+
+Request rates in these runs (575 and 1,690 req/s) are not comparable with the table
+above: they pass through Docker Desktop's networking and nginx on the same laptop, and the
+accuracy scenarios are not throughput tests.
+
 ## Optimisation: parse the JWT once per request
 
 **Finding.** The rejected path skips the upstream yet was only ~25% faster than the

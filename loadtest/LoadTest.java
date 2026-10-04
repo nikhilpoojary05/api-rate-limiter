@@ -52,6 +52,8 @@ public class LoadTest {
     static final int DURATION = Integer.parseInt(env("DURATION_SECONDS", "20"));
     static final String TIER = "TIER_LT";
     static final String RUN = UUID.randomUUID().toString().substring(0, 8);
+    /** Consecutive readiness passes needed: enough to reach every instance behind a balancer. */
+    static final int READY_PASSES = 10;
 
     static final HttpClient HTTP = HttpClient.newBuilder()
             .version(HttpClient.Version.HTTP_1_1)
@@ -237,17 +239,25 @@ public class LoadTest {
         System.out.print("Waiting for the gateway to load the test rules (it refreshes every 30s) ");
         long until = System.currentTimeMillis() + 60_000;
         int attempt = 0;
+        int passes = 0;
         while (System.currentTimeMillis() < until) {
             // lt-block allows 1 request per hour. Under the default rule a second request
-            // would still pass, so a 429 on the second call proves our rules are live.
+            // would still pass, so a 429 on the second call proves our rules are live on
+            // the instance that served it. Behind a load balancer each instance refreshes
+            // on its own schedule, so one pass proves only one instance: require several
+            // in a row, which round-robin spreads across every instance.
             String t = jwt.token("lt-block", "probe-" + RUN + "-" + attempt++);
             int first = status(GATEWAY + "/api/demo/ping", t);
             int second = status(GATEWAY + "/api/demo/ping", t);
-            if (first == 200 && second == 429) {
-                System.out.println("ready.");
-                return;
-            }
             if (first == 401) throw new IllegalStateException("Gateway rejected the minted token — is JWT_SECRET the gateway's?");
+            if (first == 200 && second == 429) {
+                if (++passes >= READY_PASSES) {
+                    System.out.println("ready.");
+                    return;
+                }
+                continue;
+            }
+            passes = 0;
             System.out.print(".");
             Thread.sleep(3_000);
         }

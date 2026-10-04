@@ -8,6 +8,8 @@ import com.ratelimiter.admin.repository.RateLimitRuleRepository;
 import com.ratelimiter.admin.security.TenantAccess;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Service;
@@ -87,19 +89,38 @@ public class RuleService {
         publishAllRulesToRedis();
     }
 
-    /**
+    /*
      * The gateway reads rules only from Redis, and they used to be written there only
-     * when a rule changed. A fresh Redis (new machine, new container) or an evicted key
-     * (Redis runs allkeys-lru in Compose) therefore silently dropped every tenant to the
-     * default limit. Republishing from the database on a timer covers startup, a flushed
-     * Redis and eviction alike.
+     * when a rule changed, so a fresh Redis (new machine, new container) or an evicted
+     * key (Redis runs allkeys-lru in Compose) silently dropped every tenant to the
+     * default limit. Two jobs cover that: publish on startup, and restore the key if it
+     * goes missing.
      */
-    @Scheduled(initialDelay = 0, fixedDelayString = "${ratelimit.rules.republish-ms:60000}")
-    public void republishRules() {
+
+    /** On startup the database is the authority, so its rules replace whatever Redis has. */
+    @EventListener(ApplicationReadyEvent.class)
+    public void publishOnStartup() {
         try {
             publishAllRulesToRedis();
         } catch (RuntimeException e) {
-            log.error("Scheduled rule publish failed; retrying on the next run", e);
+            log.error("Rule publish on startup failed; the periodic check will retry", e);
+        }
+    }
+
+    /**
+     * Writes only when the key is missing. Overwriting on every run also wiped rules that
+     * tools add on purpose, such as the load test's temporary ones, mid-test.
+     */
+    @Scheduled(fixedDelayString = "${ratelimit.rules.republish-ms:60000}",
+               initialDelayString = "${ratelimit.rules.republish-ms:60000}")
+    public void restoreRulesIfMissing() {
+        try {
+            if (Boolean.FALSE.equals(redisTemplate.hasKey("rules:all"))) {
+                log.warn("Rate limit rules missing from Redis; restoring them from the database");
+                publishAllRulesToRedis();
+            }
+        } catch (RuntimeException e) {
+            log.error("Rule check failed; retrying on the next run", e);
         }
     }
 
