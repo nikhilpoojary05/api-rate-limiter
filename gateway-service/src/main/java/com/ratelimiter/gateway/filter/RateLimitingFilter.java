@@ -19,6 +19,7 @@ import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicLong;
 
 @Component
 @Slf4j
@@ -75,7 +76,7 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
 
                     if (!result.allowed()) {
                         addLimitHeaders(exchange, resetMs, retryAfter, true);
-                        publishEvent(exchange, tenantId, userId, ip, startTime, "BLOCKED");
+                        publishEvent(exchange, tenantId, userId, ip, startTime, 0, "BLOCKED");
                         return Mono.error(new RateLimitExceededException((int) retryAfter));
                     }
 
@@ -83,9 +84,18 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
                     exchange.getResponse().getHeaders()
                             .set("X-RateLimit-Remaining", String.valueOf(result.remaining()));
 
+                    // Latency is time to first byte: when the response starts, not when it
+                    // ends. Measured to the end, a dashboard's live event stream recorded
+                    // minutes of "latency" and dragged the average from ~10 ms to ~250 ms.
+                    AtomicLong firstByteAt = new AtomicLong();
+                    exchange.getResponse().beforeCommit(() -> {
+                        firstByteAt.compareAndSet(0, System.currentTimeMillis());
+                        return Mono.empty();
+                    });
+
                     return chain.filter(exchange)
-                            .doOnSuccess(v -> publishEvent(exchange, tenantId, userId, ip, startTime, "ALLOWED"))
-                            .doOnError(e -> publishEvent(exchange, tenantId, userId, ip, startTime, "ERROR"));
+                            .doOnSuccess(v -> publishEvent(exchange, tenantId, userId, ip, startTime, firstByteAt.get(), "ALLOWED"))
+                            .doOnError(e -> publishEvent(exchange, tenantId, userId, ip, startTime, firstByteAt.get(), "ERROR"));
                 });
     }
 
@@ -114,10 +124,12 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
     /**
      * Serializes a traffic event to JSON and pushes it to the Redis list "traffic:events".
      * The admin-service RedisTrafficConsumer reads from this list via LPOP every second.
+     *
+     * @param firstByteAt when the response was committed, or 0 to measure to now
      */
     private void publishEvent(ServerWebExchange exchange, String tenantId, String userId,
-                               String ip, long startTime, String status) {
-        long latencyMs = System.currentTimeMillis() - startTime;
+                               String ip, long startTime, long firstByteAt, String status) {
+        long latencyMs = (firstByteAt > 0 ? firstByteAt : System.currentTimeMillis()) - startTime;
         String path    = exchange.getRequest().getURI().getPath();
         String method  = exchange.getRequest().getMethod().name();
         int httpStatus = exchange.getResponse().getStatusCode() != null

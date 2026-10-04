@@ -191,6 +191,36 @@ class TenantScopedServicesTest {
             RateLimitRuleDto updated = ruleService.updateRule(ACME_RULE_ID, rule("acme-corp"));
             assertThat(updated.getRequestLimit()).isEqualTo(1_000_000);
         }
+
+        @Test
+        @DisplayName("creates a tenant with a generated API key, ignoring any key sent")
+        void createGeneratesApiKey() {
+            TenantDto dto = new TenantDto();
+            dto.setTenantId("new-co");
+            dto.setName("New Co");
+            dto.setTier("TIER_FREE");
+            dto.setApiKey("chosen-by-caller");
+
+            tenantService.createTenant(dto);
+
+            org.mockito.ArgumentCaptor<Tenant> saved = org.mockito.ArgumentCaptor.forClass(Tenant.class);
+            verify(tenants).save(saved.capture());
+            assertThat(saved.getValue().getApiKey()).startsWith("rk_").hasSizeGreaterThan(40)
+                    .isNotEqualTo("chosen-by-caller");
+        }
+
+        @Test
+        @DisplayName("refuses a tenant ID that already exists")
+        void createRejectsDuplicate() {
+            when(tenants.findByTenantId("acme-corp")).thenReturn(Optional.of(new Tenant()));
+            TenantDto dto = new TenantDto();
+            dto.setTenantId("acme-corp");
+
+            assertThatThrownBy(() -> tenantService.createTenant(dto))
+                    .isInstanceOf(IllegalArgumentException.class)
+                    .hasMessageContaining("already exists");
+            verify(tenants, never()).save(any());
+        }
     }
 
     @Test

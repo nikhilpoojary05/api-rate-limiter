@@ -7,12 +7,16 @@ import com.ratelimiter.admin.security.TenantAccess;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
+import java.security.SecureRandom;
+import java.util.Base64;
 import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class TenantService {
+    private static final SecureRandom RANDOM = new SecureRandom();
+
     private final TenantRepository repository;
     private final TenantAccess tenantAccess;
 
@@ -34,10 +38,19 @@ public class TenantService {
     /** Creating a tenant is inherently cross-tenant. */
     public TenantDto createTenant(TenantDto dto) {
         tenantAccess.requireSuperAdmin();
+        if (dto.getTenantId() == null || dto.getTenantId().isBlank()) {
+            throw new IllegalArgumentException("Tenant ID is required");
+        }
+        if (repository.findByTenantId(dto.getTenantId()).isPresent()) {
+            throw new IllegalArgumentException("Tenant ID already exists");
+        }
         Tenant tenant = Tenant.builder()
                 .tenantId(dto.getTenantId())
                 .name(dto.getName())
-                .apiKey(dto.getApiKey())
+                // Generated here, never taken from the request: the column is NOT NULL and
+                // no client sent one, so every create failed; and a caller must not be
+                // able to choose a tenant's key.
+                .apiKey(newApiKey())
                 .tier(dto.getTier())
                 .active(dto.isActive())
                 .build();
@@ -61,6 +74,12 @@ public class TenantService {
     }
 
     /** Shows enough of a key to identify it, never enough to use it. */
+    private static String newApiKey() {
+        byte[] bytes = new byte[32];
+        RANDOM.nextBytes(bytes);
+        return "rk_" + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
+    }
+
     private static String mask(String apiKey) {
         if (apiKey == null || apiKey.isBlank()) {
             return null;

@@ -67,6 +67,17 @@ public class SseEmitterRegistry {
         emitter.onTimeout(() -> subscribers.remove(subscriber));
         emitter.onError(e -> subscribers.remove(subscriber));
 
+        // Starts the stream at once. Until the first event nothing is sent, so the client
+        // could not tell it was connected, and the gateway's time-to-first-byte latency
+        // measured the wait for the first keep-alive ping (up to 15 s).
+        try {
+            emitter.send(SseEmitter.event().name("connected").data("ok"));
+        } catch (IOException e) {
+            subscribers.remove(subscriber);
+            emitter.completeWithError(e);
+            return;
+        }
+
         log.debug("SSE subscriber added for tenant={} (total {})",
                 principal.tenantId(), subscribers.size());
     }

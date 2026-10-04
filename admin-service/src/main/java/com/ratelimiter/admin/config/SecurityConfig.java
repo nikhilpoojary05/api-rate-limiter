@@ -1,6 +1,7 @@
 package com.ratelimiter.admin.config;
 
 import com.ratelimiter.admin.security.JwtAdminFilter;
+import jakarta.servlet.DispatcherType;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.context.annotation.Bean;
@@ -45,6 +46,10 @@ public class SecurityConfig {
             }))
             .sessionManagement(session -> session.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
             .authorizeHttpRequests(auth -> auth
+                // The live stream finishes on an async dispatch that carries no
+                // authentication. The request was authorized when it arrived; denying the
+                // dispatch only logged "Access Denied" every time a dashboard closed.
+                .dispatcherTypeMatchers(DispatcherType.ASYNC).permitAll()
                 // "/admin/analytics/live" is deliberately NOT public: it streams every
                 // tenant's traffic, including client IPs and request paths.
                 .requestMatchers("/actuator/**", "/swagger-ui/**", "/v3/api-docs/**", "/swagger-ui.html").permitAll()
