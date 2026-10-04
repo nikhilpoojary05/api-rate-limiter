@@ -2,7 +2,7 @@ import { NavLink, useNavigate } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import {
   LayoutDashboard, ShieldCheck, Building2, BarChart2,
-  Shield, LogOut, Zap
+  Shield, LogOut
 } from 'lucide-react';
 
 export default function Sidebar() {
@@ -54,38 +54,19 @@ export default function Sidebar() {
           <Building2 size={16} />
           Tenants
         </NavLink>
-
-        <div className="nav-section-label">Resources</div>
-
-        <a href="http://localhost:8090/swagger-ui.html" target="_blank" rel="noreferrer"
-          className="nav-item" id="nav-gateway-swagger">
-          <Zap size={16} />
-          Gateway API Docs
-        </a>
-
-        <a href="http://localhost:8082/swagger-ui.html" target="_blank" rel="noreferrer"
-          className="nav-item" id="nav-admin-swagger">
-          <Zap size={16} />
-          Admin API Docs
-        </a>
       </nav>
 
       <div className="sidebar-footer">
         {user && (
           <div style={{ padding: '8px 10px', marginBottom: '8px' }}>
             <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-primary)' }}>
-              {user.username || 'Admin User'}
+              {user.username}
             </div>
             <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
-              {user.tenantId || 'acme-corp'}
+              {user.tenantId}
             </div>
           </div>
         )}
-
-        <div className="status-indicator" style={{ marginBottom: '8px' }}>
-          <div className="status-dot" />
-          <span>Gateway Online</span>
-        </div>
 
         <button className="nav-item" style={{ width: '100%', border: 'none', cursor: 'pointer', background: 'none' }}
           id="logout-btn" onClick={handleLogout}>

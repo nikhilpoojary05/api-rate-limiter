@@ -14,7 +14,7 @@ administrators a tenant-scoped admin API and a React dashboard with live traffic
 - **Profiled and tuned.** A Java Flight Recorder profile showed each JWT was verified six
   times per request; verifying once cut its CPU share from 23% to 10% and raised
   throughput 8% in a controlled A/B test.
-- **72 tests**, including concurrency tests that were deliberately broken to confirm they fail.
+- **77 tests**, including concurrency tests that were deliberately broken to confirm they fail.
 
 ---
 
@@ -247,7 +247,7 @@ Gateway properties:
 mvn test
 ```
 
-72 tests across `common`, `gateway-service` and `admin-service`:
+77 tests across `common`, `gateway-service` and `admin-service`:
 
 - **Limiters against a real Redis** — exact limits, window sliding, refill at the configured
   rate, capacity caps, and 300 concurrent requests in a single frozen millisecond admitting
@@ -257,6 +257,8 @@ mvn test
   discarded, one JWT parse per request.
 - **Authorization matrix** — the real admin security chain with signed tokens: cross-tenant
   access refused on every path, super-admin allowed, the live stream closed to non-admins.
+- **Admin data** — traffic time series bucketed with empty periods filled, unknown ranges
+  rejected; new tenants get a server-generated API key and duplicate IDs are refused.
 
 Every security and concurrency guard was checked by breaking it on purpose and confirming a
 test fails. That caught a concurrency test that could never have failed, and a missing test

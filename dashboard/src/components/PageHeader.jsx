@@ -1,6 +1,14 @@
 import { useAuth } from '../context/AuthContext';
 import { Shield } from 'lucide-react';
 
+// Most privileged first: every account also holds ROLE_USER, and showing the first role
+// in the list labelled the super-admin as a plain user.
+const ROLE_RANK = ['ROLE_SUPER_ADMIN', 'ROLE_ADMIN', 'ROLE_USER'];
+
+function displayRole(roles = []) {
+  return ROLE_RANK.find(r => roles.includes(r)) || roles[0] || '';
+}
+
 export default function PageHeader({ title, subtitle, actions }) {
   const { user } = useAuth();
 
@@ -34,7 +42,7 @@ export default function PageHeader({ title, subtitle, actions }) {
                 {user.username || 'Admin'}
               </div>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                {user.roles?.[0] || 'ROLE_ADMIN'}
+                {displayRole(user.roles)}
               </div>
             </div>
           </div>

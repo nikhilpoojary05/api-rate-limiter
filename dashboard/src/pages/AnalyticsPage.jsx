@@ -1,49 +1,26 @@
 import { useState, useEffect } from 'react';
-import { analyticsApi } from '../services/api';
-import { BarChart2, Clock, TrendingUp, ShieldAlert } from 'lucide-react';
+import { analyticsApi, tenantsApi, errorMessage } from '../services/api';
+import { RANGES, RANGE_KEYS, toChartPoints, totals } from '../lib/timeseries';
+import { BarChart2, Clock, TrendingUp, ShieldAlert, AlertCircle } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis,
   CartesianGrid, Tooltip, ResponsiveContainer, Legend, PieChart, Pie, Cell
 } from 'recharts';
 import { format } from 'date-fns';
 
-const RANGES = ['1h', '6h', '24h', '7d'];
-const COLORS_PIE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b'];
+// Every figure here comes from the admin API. The page used to show generated sample
+// traffic (tens of thousands of requests, invented users and IPs) whenever a request
+// failed, and always for the traffic-share chart.
 
-const DEMO_TIMESERIES = Array.from({ length: 24 }, (_, i) => ({
-  time: `${String(i).padStart(2, '0')}:00`,
-  allowed: Math.floor(Math.random() * 3000) + 500,
-  blocked: Math.floor(Math.random() * 300),
-  avgLatency: Math.floor(Math.random() * 60) + 10,
-}));
-
-const DEMO_PIE = [
-  { name: 'acme-corp', value: 45 },
-  { name: 'beta-inc', value: 35 },
-  { name: 'free-user-co', value: 15 },
-  { name: 'other', value: 5 },
-];
-
-const DEMO_EVENTS = Array.from({ length: 20 }, (_, i) => ({
-  id: i + 1,
-  tenantId: ['acme-corp', 'beta-inc', 'free-user-co'][i % 3],
-  userId: `user-${(i % 5) + 1}`,
-  ipAddress: `192.168.1.${(i % 50) + 10}`,
-  path: ['/api/demo/ping', '/api/demo/echo', '/api/admin/rules', '/api/demo/info'][i % 4],
-  method: 'GET',
-  status: i % 7 === 0 ? 'BLOCKED' : 'ALLOWED',
-  latencyMs: Math.floor(Math.random() * 100) + 5,
-  httpStatus: i % 7 === 0 ? 429 : 200,
-  timestamp: new Date(Date.now() - i * 45000).toISOString(),
-}));
+const COLORS_PIE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     return (
       <div style={{ background: 'var(--bg-elevated)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '10px 14px', fontSize: '12px' }}>
-        <p style={{ color: 'var(--text-muted)', marginBottom: '6px' }}>{label}</p>
+        <p style={{ color: 'var(--text-muted)', marginBottom: '6px' }}>{label ?? payload[0].name}</p>
         {payload.map((p, i) => (
-          <p key={i} style={{ color: p.color, fontWeight: 600 }}>{p.name}: {p.value}</p>
+          <p key={i} style={{ color: p.color || p.payload?.fill, fontWeight: 600 }}>{p.name}: {p.value ?? '—'}</p>
         ))}
       </div>
     );
@@ -53,80 +30,110 @@ const CustomTooltip = ({ active, payload, label }) => {
 
 export default function AnalyticsPage() {
   const [range, setRange] = useState('24h');
+  const [tenants, setTenants] = useState([]);
   const [tenantFilter, setTenantFilter] = useState('');
-  const [timeSeries, setTimeSeries] = useState(DEMO_TIMESERIES);
-  const [events, setEvents] = useState(DEMO_EVENTS);
-  const [loading, setLoading] = useState(false);
+  const [series, setSeries] = useState([]);
+  const [events, setEvents] = useState([]);
+  const [share, setShare] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
+
+  // The API returns only the tenants this account may see: all of them for a
+  // super-admin, just their own for a tenant admin.
+  useEffect(() => {
+    tenantsApi.getAll()
+      .then(res => setTenants(res.data))
+      .catch(err => setError(errorMessage(err, 'Could not load tenants')));
+  }, []);
+
+  const crossTenant = tenants.length > 1 && !tenantFilter;
 
   useEffect(() => {
+    const scope = tenantFilter || undefined;
     setLoading(true);
     Promise.all([
-      analyticsApi.getTimeSeries(tenantFilter || undefined, range),
-      analyticsApi.getRecentEvents(tenantFilter || undefined, 0, 20),
+      analyticsApi.getTimeSeries(scope, range),
+      analyticsApi.getRecentEvents(scope, 0, 20),
     ])
       .then(([tsRes, evtRes]) => {
-        setTimeSeries(tsRes.data.data || DEMO_TIMESERIES);
-        setEvents(evtRes.data.data?.content || DEMO_EVENTS);
+        setSeries(tsRes.data);
+        setEvents(evtRes.data.content);
+        setError('');
       })
-      .catch(() => {
-        setTimeSeries(DEMO_TIMESERIES);
-        setEvents(DEMO_EVENTS);
+      .catch(err => {
+        setSeries([]);
+        setEvents([]);
+        setError(errorMessage(err, 'Could not load analytics'));
       })
       .finally(() => setLoading(false));
   }, [range, tenantFilter]);
 
-  const totalAllowed = timeSeries.reduce((s, p) => s + (p.allowed || 0), 0);
-  const totalBlocked = timeSeries.reduce((s, p) => s + (p.blocked || 0), 0);
-  const blockRate = totalAllowed + totalBlocked > 0
-    ? ((totalBlocked / (totalAllowed + totalBlocked)) * 100).toFixed(2)
-    : '0.00';
-  const avgLatency = timeSeries.length
-    ? (timeSeries.reduce((s, p) => s + (p.avgLatency || 0), 0) / timeSeries.length).toFixed(1)
-    : '0';
+  // Traffic share needs each tenant's own total for the range.
+  useEffect(() => {
+    if (!crossTenant) {
+      setShare([]);
+      return;
+    }
+    Promise.all(tenants.map(t => analyticsApi.getTimeSeries(t.tenantId, range)
+      .then(res => {
+        const { allowed, blocked } = totals(res.data);
+        return { name: t.tenantId, value: allowed + blocked };
+      })))
+      .then(rows => setShare(rows.filter(r => r.value > 0)))
+      .catch(() => setShare([]));
+  }, [crossTenant, tenants, range]);
+
+  const chartData = toChartPoints(series, range);
+  const t = totals(series);
+  const bucket = RANGES[range].bucket;
 
   return (
     <div className="page-content">
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
         <div>
           <h1 className="section-title">Deep Analytics</h1>
-          <p className="section-subtitle">Traffic patterns, latency histograms, and blocked request analysis</p>
+          <p className="section-subtitle">Traffic, latency and blocked requests for the selected range</p>
         </div>
         <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
           <select value={tenantFilter} onChange={e => setTenantFilter(e.target.value)}
             id="analytics-tenant-filter" style={{ width: 'auto', padding: '7px 12px' }}>
-            <option value="">All Tenants</option>
-            <option value="acme-corp">acme-corp</option>
-            <option value="beta-inc">beta-inc</option>
-            <option value="free-user-co">free-user-co</option>
+            {tenants.length !== 1 && <option value="">All Tenants</option>}
+            {tenants.map(tn => <option key={tn.tenantId} value={tn.tenantId}>{tn.tenantId}</option>)}
           </select>
-          {RANGES.map(r => (
+          {RANGE_KEYS.map(r => (
             <button key={r} className={`btn btn-sm ${range === r ? 'btn-primary' : 'btn-secondary'}`}
               onClick={() => setRange(r)} id={`analytics-range-${r}`}>{r}</button>
           ))}
         </div>
       </div>
 
+      {error && (
+        <div style={{ background: 'var(--accent-danger-glow)', border: '1px solid rgba(239,68,68,0.3)', borderRadius: 'var(--radius)', padding: '10px 12px', color: 'var(--accent-danger)', fontSize: '13px', marginBottom: '16px', display: 'flex', gap: '8px', alignItems: 'center' }}>
+          <AlertCircle size={14} />{error}
+        </div>
+      )}
+
       {/* Stat Row */}
       <div className="kpi-grid" style={{ marginBottom: '20px' }}>
         <div className="kpi-card blue">
           <div className="kpi-icon-wrap blue"><TrendingUp /></div>
-          <div className="kpi-value">{totalAllowed.toLocaleString()}</div>
-          <div className="kpi-label">Total Allowed</div>
+          <div className="kpi-value">{t.allowed.toLocaleString()}</div>
+          <div className="kpi-label">Allowed ({range})</div>
         </div>
         <div className="kpi-card red">
           <div className="kpi-icon-wrap red"><ShieldAlert /></div>
-          <div className="kpi-value">{totalBlocked.toLocaleString()}</div>
-          <div className="kpi-label">Total Blocked</div>
+          <div className="kpi-value">{t.blocked.toLocaleString()}</div>
+          <div className="kpi-label">Blocked ({range})</div>
         </div>
         <div className="kpi-card orange">
           <div className="kpi-icon-wrap orange"><BarChart2 /></div>
-          <div className="kpi-value">{blockRate}<span style={{ fontSize: '16px' }}>%</span></div>
-          <div className="kpi-label">Block Rate</div>
+          <div className="kpi-value">{t.blockRate.toFixed(2)}<span style={{ fontSize: '16px' }}>%</span></div>
+          <div className="kpi-label">Block Rate ({range})</div>
         </div>
         <div className="kpi-card purple">
           <div className="kpi-icon-wrap purple"><Clock /></div>
-          <div className="kpi-value">{avgLatency}<span style={{ fontSize: '16px' }}>ms</span></div>
-          <div className="kpi-label">Avg Latency</div>
+          <div className="kpi-value">{t.avgLatency.toFixed(1)}<span style={{ fontSize: '16px' }}>ms</span></div>
+          <div className="kpi-label">Avg Latency ({range})</div>
         </div>
       </div>
 
@@ -134,9 +141,10 @@ export default function AnalyticsPage() {
       <div className="chart-container" style={{ marginBottom: '16px' }}>
         <div className="card-header">
           <span className="card-title"><BarChart2 size={16} />Traffic Over Time ({range})</span>
+          <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Requests per {bucket}</span>
         </div>
         <ResponsiveContainer width="100%" height={260}>
-          <AreaChart data={timeSeries}>
+          <AreaChart data={chartData}>
             <defs>
               <linearGradient id="analGradAllowed" x1="0" y1="0" x2="0" y2="1">
                 <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.25} />
@@ -148,8 +156,8 @@ export default function AnalyticsPage() {
               </linearGradient>
             </defs>
             <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" vertical={false} />
-            <XAxis dataKey="time" stroke="var(--text-muted)" tick={{ fontSize: 11 }} />
-            <YAxis stroke="var(--text-muted)" tick={{ fontSize: 11 }} />
+            <XAxis dataKey="time" stroke="var(--text-muted)" tick={{ fontSize: 11 }} minTickGap={24} />
+            <YAxis stroke="var(--text-muted)" tick={{ fontSize: 11 }} allowDecimals={false} />
             <Tooltip content={<CustomTooltip />} />
             <Legend wrapperStyle={{ fontSize: '12px', color: 'var(--text-secondary)' }} />
             <Area type="monotone" dataKey="allowed" name="Allowed" stroke="#3b82f6" fill="url(#analGradAllowed)" strokeWidth={2} dot={false} />
@@ -163,14 +171,15 @@ export default function AnalyticsPage() {
         <div className="chart-container">
           <div className="card-header">
             <span className="card-title"><Clock size={16} />Avg Response Latency</span>
+            <span style={{ fontSize: '11px', color: 'var(--text-muted)' }}>Time to first byte (ms) per {bucket}</span>
           </div>
           <ResponsiveContainer width="100%" height={200}>
-            <BarChart data={timeSeries.slice(-12)}>
+            <BarChart data={chartData}>
               <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" vertical={false} />
-              <XAxis dataKey="time" stroke="var(--text-muted)" tick={{ fontSize: 10 }} />
+              <XAxis dataKey="time" stroke="var(--text-muted)" tick={{ fontSize: 10 }} minTickGap={24} />
               <YAxis stroke="var(--text-muted)" tick={{ fontSize: 11 }} unit="ms" />
               <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="avgLatency" name="Latency (ms)" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="latency" name="Latency (ms)" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -178,24 +187,34 @@ export default function AnalyticsPage() {
         {/* Traffic Share Pie */}
         <div className="chart-container">
           <div className="card-header">
-            <span className="card-title"><BarChart2 size={16} />Traffic Share by Tenant</span>
+            <span className="card-title"><BarChart2 size={16} />Traffic Share by Tenant ({range})</span>
           </div>
-          <ResponsiveContainer width="100%" height={200}>
-            <PieChart>
-              <Pie data={DEMO_PIE} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={45} paddingAngle={3}>
-                {DEMO_PIE.map((_, i) => <Cell key={i} fill={COLORS_PIE[i % COLORS_PIE.length]} />)}
-              </Pie>
-              <Tooltip content={<CustomTooltip />} />
-              <Legend wrapperStyle={{ fontSize: '12px', color: 'var(--text-secondary)' }} />
-            </PieChart>
-          </ResponsiveContainer>
+          {!crossTenant ? (
+            <div className="empty-state">
+              <p>Shown when viewing all tenants</p>
+            </div>
+          ) : share.length === 0 ? (
+            <div className="empty-state">
+              <p>No traffic in this range</p>
+            </div>
+          ) : (
+            <ResponsiveContainer width="100%" height={200}>
+              <PieChart>
+                <Pie data={share} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={45} paddingAngle={3}>
+                  {share.map((_, i) => <Cell key={i} fill={COLORS_PIE[i % COLORS_PIE.length]} />)}
+                </Pie>
+                <Tooltip content={<CustomTooltip />} />
+                <Legend wrapperStyle={{ fontSize: '12px', color: 'var(--text-secondary)' }} />
+              </PieChart>
+            </ResponsiveContainer>
+          )}
         </div>
       </div>
 
       {/* Recent Events Table */}
       <div className="table-container">
         <div className="table-toolbar">
-          <span className="table-toolbar-title"><ShieldAlert size={16} />Recent Traffic Events ({events.length})</span>
+          <span className="table-toolbar-title"><ShieldAlert size={16} />Latest Traffic Events ({events.length})</span>
         </div>
         <table>
           <thead>
@@ -211,22 +230,26 @@ export default function AnalyticsPage() {
             </tr>
           </thead>
           <tbody>
-            {events.map((evt, i) => (
+            {!loading && events.length === 0 ? (
+              <tr><td colSpan={8}>
+                <div className="empty-state"><p>No traffic events yet</p></div>
+              </td></tr>
+            ) : events.map((evt, i) => (
               <tr key={i}>
                 <td className="mono" style={{ fontSize: '11px' }}>
-                  {evt.timestamp ? format(new Date(evt.timestamp), 'HH:mm:ss') : '—'}
+                  {evt.timestamp ? format(new Date(evt.timestamp), 'dd MMM HH:mm:ss') : '—'}
                 </td>
                 <td><span className="badge blue">{evt.tenantId}</span></td>
                 <td className="mono">{evt.userId || '—'}</td>
                 <td className="mono">{evt.ipAddress}</td>
-                <td className="mono text-primary" style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{evt.path}</td>
+                <td className="mono text-primary" style={{ maxWidth: '180px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{evt.method} {evt.path}</td>
                 <td>
-                  <span className={`badge ${evt.status === 'BLOCKED' ? 'red' : 'green'}`}>
+                  <span className={`badge ${evt.status === 'BLOCKED' ? 'red' : evt.status === 'ERROR' ? 'orange' : 'green'}`}>
                     {evt.status}
                   </span>
                 </td>
                 <td>
-                  <span className={`badge ${evt.httpStatus === 429 ? 'red' : 'green'}`}>
+                  <span className={`badge ${evt.httpStatus >= 400 ? 'red' : 'green'}`}>
                     {evt.httpStatus}
                   </span>
                 </td>

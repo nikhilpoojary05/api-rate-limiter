@@ -1,18 +1,12 @@
 import { useState, useEffect } from 'react';
-import { tenantsApi } from '../services/api';
+import { tenantsApi, errorMessage } from '../services/api';
 import { Building2, Plus, Pencil, X, AlertCircle, CheckCircle } from 'lucide-react';
 
 const TIERS = ['TIER_FREE', 'TIER_A', 'TIER_B', 'TIER_ENTERPRISE'];
 const TIER_COLORS = { TIER_FREE: 'gray', TIER_A: 'blue', TIER_B: 'purple', TIER_ENTERPRISE: 'cyan' };
 
-const DEMO_TENANTS = [
-  { id: 'acme-corp', name: 'Acme Corporation', tier: 'TIER_A', description: 'Enterprise API client - Tier A rate limits', active: true, createdAt: '2024-01-15T10:00:00Z' },
-  { id: 'beta-inc', name: 'Beta Inc', tier: 'TIER_B', description: 'Premium partner integration', active: true, createdAt: '2024-02-20T09:30:00Z' },
-  { id: 'free-user-co', name: 'Free User Co', tier: 'TIER_FREE', description: 'Free tier trial account', active: true, createdAt: '2024-03-01T14:00:00Z' },
-];
-
 function TenantModal({ tenant, onClose, onSave }) {
-  const [form, setForm] = useState(tenant || { id: '', name: '', tier: 'TIER_FREE', description: '', active: true });
+  const [form, setForm] = useState(tenant || { tenantId: '', name: '', tier: 'TIER_FREE', active: true });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const set = (k, v) => setForm(f => ({ ...f, [k]: v }));
@@ -22,14 +16,15 @@ function TenantModal({ tenant, onClose, onSave }) {
     setError('');
     setLoading(true);
     try {
-      if (form.id && tenant) {
-        await tenantsApi.update(form.id, form);
+      // The API takes the slug as tenantId and addresses updates by the numeric id.
+      if (tenant) {
+        await tenantsApi.update(tenant.id, { name: form.name, tier: form.tier, active: form.active });
       } else {
-        await tenantsApi.create(form);
+        await tenantsApi.create({ tenantId: form.tenantId, name: form.name, tier: form.tier, active: form.active });
       }
       onSave();
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to save tenant');
+      setError(errorMessage(err, 'Failed to save tenant'));
     } finally {
       setLoading(false);
     }
@@ -52,7 +47,7 @@ function TenantModal({ tenant, onClose, onSave }) {
         <form onSubmit={handleSubmit}>
           <div className="input-group">
             <label>Tenant ID (slug)</label>
-            <input value={form.id} onChange={e => set('id', e.target.value.toLowerCase().replace(/\s+/g, '-'))}
+            <input value={form.tenantId} onChange={e => set('tenantId', e.target.value.toLowerCase().replace(/\s+/g, '-'))}
               placeholder="e.g. my-company" required disabled={!!tenant} id="tenant-id-input" />
           </div>
           <div className="input-group">
@@ -65,12 +60,6 @@ function TenantModal({ tenant, onClose, onSave }) {
             <select value={form.tier} onChange={e => set('tier', e.target.value)} id="tenant-tier-select">
               {TIERS.map(t => <option key={t} value={t}>{t}</option>)}
             </select>
-          </div>
-          <div className="input-group">
-            <label>Description</label>
-            <textarea value={form.description} onChange={e => set('description', e.target.value)}
-              placeholder="Optional description" rows={3} id="tenant-description"
-              style={{ resize: 'vertical', minHeight: '80px' }} />
           </div>
           <div className="toggle-wrap" style={{ marginBottom: '8px' }}>
             <button type="button" id="tenant-active-toggle"
@@ -99,12 +88,17 @@ export default function TenantsPage() {
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editTenant, setEditTenant] = useState(null);
+  const [loadError, setLoadError] = useState('');
 
   const fetchTenants = () => {
     setLoading(true);
+    setLoadError('');
     tenantsApi.getAll()
-      .then(res => setTenants(res.data.data || []))
-      .catch(() => setTenants(DEMO_TENANTS))
+      .then(res => setTenants(res.data))
+      .catch(err => {
+        setTenants([]);
+        setLoadError(errorMessage(err, 'Could not load tenants'));
+      })
       .finally(() => setLoading(false));
   };
 
@@ -141,7 +135,7 @@ export default function TenantsPage() {
                   </div>
                   <div>
                     <div style={{ fontWeight: 700, fontSize: '14px', color: 'var(--text-primary)' }}>{tenant.name}</div>
-                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{tenant.id}</div>
+                    <div style={{ fontSize: '12px', color: 'var(--text-muted)', fontFamily: 'var(--font-mono)' }}>{tenant.tenantId}</div>
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
@@ -160,18 +154,19 @@ export default function TenantsPage() {
                 </span>
               </div>
 
-              {tenant.description && (
-                <p style={{ fontSize: '12px', color: 'var(--text-muted)', lineHeight: 1.5 }}>{tenant.description}</p>
-              )}
-
-              <div style={{ marginTop: '12px', paddingTop: '12px', borderTop: '1px solid var(--border-subtle)', fontSize: '11px', color: 'var(--text-muted)', display: 'flex', gap: '16px' }}>
-                <span>Created {tenant.createdAt ? new Date(tenant.createdAt).toLocaleDateString() : '—'}</span>
-              </div>
             </div>
           ))
         )}
 
-        {!loading && tenants.length === 0 && (
+        {!loading && loadError && (
+          <div className="empty-state" style={{ gridColumn: '1/-1' }}>
+            <AlertCircle />
+            <h3>Could not load tenants</h3>
+            <p>{loadError}</p>
+          </div>
+        )}
+
+        {!loading && !loadError && tenants.length === 0 && (
           <div className="empty-state" style={{ gridColumn: '1/-1' }}>
             <Building2 />
             <h3>No tenants configured</h3>

@@ -49,6 +49,15 @@ api.interceptors.response.use(
   }
 );
 
+/**
+ * The message from a failed request. The services answer errors as either
+ * {message} or {error}, so both are read before falling back.
+ */
+export function errorMessage(err, fallback) {
+  const body = err?.response?.data;
+  return body?.message || body?.error || fallback;
+}
+
 // ─── Auth ─────────────────────────────────────────────────────────────────────
 export const authApi = {
   login: (data) => api.post('/auth/login', data),
@@ -58,7 +67,8 @@ export const authApi = {
 
 // ─── Analytics ────────────────────────────────────────────────────────────────
 export const analyticsApi = {
-  getSummary: () => api.get('/admin/analytics/summary'),
+  getSummary: (tenantId) =>
+    api.get('/admin/analytics/summary', { params: { tenantId } }),
   getTimeSeries: (tenantId, range) =>
     api.get('/admin/analytics/timeseries', { params: { tenantId, range } }),
   getRecentEvents: (tenantId, page = 0, size = 50) =>

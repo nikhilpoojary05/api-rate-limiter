@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { rulesApi } from '../services/api';
+import { rulesApi, errorMessage } from '../services/api';
 import { ShieldCheck, Plus, Pencil, Trash2, RefreshCw, X, AlertCircle } from 'lucide-react';
 
 const TIERS = ['TIER_FREE', 'TIER_A', 'TIER_B', 'TIER_ENTERPRISE'];
@@ -34,7 +34,7 @@ function RuleModal({ rule, onClose, onSave }) {
       }
       onSave();
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to save rule');
+      setError(errorMessage(err, 'Failed to save rule'));
     } finally {
       setLoading(false);
     }
@@ -118,24 +118,23 @@ function RuleModal({ rule, onClose, onSave }) {
   );
 }
 
-const DEMO_RULES = [
-  { id: 1, tenantId: 'acme-corp', tier: 'TIER_A', algorithm: 'SLIDING_WINDOW', requestLimit: 100, windowMs: 60000, burstCapacity: 150, active: true },
-  { id: 2, tenantId: 'beta-inc', tier: 'TIER_B', algorithm: 'SLIDING_WINDOW', requestLimit: 1000, windowMs: 60000, burstCapacity: 1500, active: true },
-  { id: 3, tenantId: 'free-user-co', tier: 'TIER_FREE', algorithm: 'TOKEN_BUCKET', requestLimit: 10, windowMs: 60000, burstCapacity: 20, active: true },
-];
-
 export default function RulesPage() {
   const [rules, setRules] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
   const [editRule, setEditRule] = useState(null);
   const [filter, setFilter] = useState('');
+  const [loadError, setLoadError] = useState('');
 
   const fetchRules = () => {
     setLoading(true);
+    setLoadError('');
     rulesApi.getAll()
       .then(res => setRules(res.data.data || []))
-      .catch(() => setRules(DEMO_RULES))
+      .catch(err => {
+        setRules([]);
+        setLoadError(errorMessage(err, 'Could not load rules'));
+      })
       .finally(() => setLoading(false));
   };
 
@@ -146,8 +145,9 @@ export default function RulesPage() {
     try {
       await rulesApi.delete(id);
       fetchRules();
-    } catch {
-      setRules(prev => prev.filter(r => r.id !== id));
+    } catch (err) {
+      // Used to drop the rule from the table anyway, showing a delete that never happened.
+      alert(errorMessage(err, 'Failed to delete rule'));
     }
   };
 
@@ -155,8 +155,8 @@ export default function RulesPage() {
     try {
       await rulesApi.publish();
       alert('Rules published to Redis gateway cache successfully.');
-    } catch {
-      alert('Failed to publish rules. Check if admin-service is running.');
+    } catch (err) {
+      alert(errorMessage(err, 'Failed to publish rules. Check if admin-service is running.'));
     }
   };
 
@@ -207,7 +207,15 @@ export default function RulesPage() {
               </tr>
             </thead>
             <tbody>
-              {filtered.length === 0 ? (
+              {loadError ? (
+                <tr><td colSpan={8}>
+                  <div className="empty-state">
+                    <AlertCircle />
+                    <h3>Could not load rules</h3>
+                    <p>{loadError}</p>
+                  </div>
+                </td></tr>
+              ) : filtered.length === 0 ? (
                 <tr><td colSpan={8}>
                   <div className="empty-state">
                     <ShieldCheck />
