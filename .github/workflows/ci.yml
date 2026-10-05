@@ -78,6 +78,11 @@ jobs:
       - name: Smoke test
         run: GATEWAY_URL=http://localhost:8080 bash .github/scripts/smoke-test.sh
 
+      # The smoke test's requests must show up in Prometheus with exact counts, and
+      # Zipkin must hold traces crossing from the gateway into an upstream service.
+      - name: Metrics and traces
+        run: bash .github/scripts/monitoring-check.sh
+
       # 50 users x 300 requests at concurrency 200, spread over the three gateways: every
       # user must be admitted exactly their limit. Exits non-zero if any is off.
       - name: Enforcement accuracy

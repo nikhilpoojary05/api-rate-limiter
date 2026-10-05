@@ -8,7 +8,16 @@
 set -euo pipefail
 
 G="${GATEWAY_URL:-http://localhost:8080}"
-PY="$(command -v python3 || command -v python)"
+# The first Python that runs, not the first that exists: on Windows "python3" can be the
+# Microsoft Store placeholder, which only prints an install hint.
+PY=""
+for candidate in python3 python; do
+  if command -v "$candidate" >/dev/null && "$candidate" -c 'import json' >/dev/null 2>&1; then
+    PY="$candidate"
+    break
+  fi
+done
+[ -n "$PY" ] || { echo "Python 3 is required"; exit 2; }
 JAR="$(mktemp -d)"
 trap 'rm -rf "$JAR"' EXIT
 failures=0

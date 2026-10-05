@@ -61,6 +61,15 @@ management:
     health:
       show-details: when-authorized
 
+  # Spans go to Zipkin at ZIPKIN_URL; Compose sets it and turns sampling on. Sampling is
+  # off by default so a local run without Zipkin does not keep failing to send spans.
+  tracing:
+    sampling:
+      probability: ${TRACING_SAMPLING_PROBABILITY:0.0}
+  zipkin:
+    tracing:
+      endpoint: ${ZIPKIN_URL:http://localhost:9411/api/v2/spans}
+
 springdoc:
   api-docs:
     path: /v3/api-docs

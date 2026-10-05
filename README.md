@@ -242,6 +242,32 @@ Passwords must be at least 12 characters.
 
 ---
 
+## Monitoring
+
+With Docker Compose, three tools run beside the services, on loopback only:
+
+| Tool | Address | Shows |
+|---|---|---|
+| Grafana | http://localhost:3001, login from `.env` | The gateway dashboard below |
+| Prometheus | http://localhost:9090 | Metrics from all four services |
+| Zipkin | http://localhost:9411 | Request traces across services |
+
+![Grafana dashboard: request and blocked rates by tenant, block rate, P99 latency, a latency heatmap and requests per gateway instance](docs/images/grafana.png)
+
+**Metrics.** Each gateway records `gateway_requests_total`, tagged by `tenant` and
+`outcome` (`allowed`, `blocked`, `error`), and a `gateway_request_duration_seconds`
+histogram of time to first byte. Login attempts carry no tenant and are tagged
+`unauthenticated`, so blocked brute-force attempts show up too. No tag holds a user or a
+path: either would create a series per value. Prometheus finds each gateway replica
+through DNS, so in the three-gateway setup the per-instance panel shows the spread.
+
+**Traces.** All four services report to Zipkin, and one request appears as one trace: the
+gateway's span, its call upstream, and the upstream service's span under it. Compose
+samples every request; elsewhere tracing is off unless `ZIPKIN_URL` and
+`TRACING_SAMPLING_PROBABILITY` are set.
+
+---
+
 ## Configuration
 
 Set in `.env` (see [`.env.example`](.env.example)):
@@ -273,8 +299,10 @@ mvn test
 
 [CI](.github/workflows/ci.yml) runs them on every push, then starts the stack with three
 gateways behind nginx and runs an [end-to-end smoke test](.github/scripts/smoke-test.sh)
-(authentication, the exact limit, tenant isolation, refresh-token rotation) and the load
-test's accuracy scenarios, which fail the build if any user is admitted the wrong amount.
+(authentication, the exact limit, tenant isolation, refresh-token rotation), a
+[monitoring check](.github/scripts/monitoring-check.sh) (the smoke test's requests counted
+exactly in Prometheus, traces crossing services in Zipkin) and the load test's accuracy
+scenarios, which fail the build if any user is admitted the wrong amount.
 
 80 tests across `common`, `gateway-service` and `admin-service`:
 
@@ -326,19 +354,14 @@ original rules and deletes everything it created. Method, full results and cavea
 
 Stated plainly, so nobody finds them the hard way:
 
-- **Grafana dashboard shows no data.** It queries custom metrics
-  (`gateway_requests_total` and friends) that nothing emits yet. Prometheus does collect the
-  standard Spring and JVM metrics — from the gateway and admin service only; auth and demo
-  lack the registry.
-- **Distributed tracing is not wired up.** Only the gateway has tracing dependencies, and
-  Compose's `ZIPKIN_URL` is not mapped to the property Spring reads, so spans never reach Zipkin.
 - **auth-service has no automated tests.** Its refresh-token rotation is transactional, and
   a test worth having needs a real Postgres.
 - **Registration reveals** whether a username or email is already taken. Closing that needs
   an email-confirmation flow, which this has no mail transport for; `emailVerified` is
   recorded but not enforced.
-- **Per-IP limiting trusts the socket address.** Behind a load balancer every request
-  appears to come from the balancer until trusted forwarded headers are configured.
+- **Per-IP limiting behind your own proxy.** The three-gateway setup takes the client
+  address from nginx's `X-Forwarded-For`. Any other proxy in front of the gateway needs the
+  same arrangement, or every client shares the proxy's address and its login limit.
 - **The live stream takes its token in the query string**, because the browser's
   `EventSource` cannot send headers. It is accepted on that one path only, but it does
   reach access logs.

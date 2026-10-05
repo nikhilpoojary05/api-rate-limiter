@@ -4,6 +4,9 @@ import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ratelimiter.gateway.exception.RateLimitExceededException;
 import com.ratelimiter.gateway.ratelimit.RateLimiterService;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.cloud.gateway.filter.GatewayFilterChain;
@@ -15,10 +18,12 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.server.ServerWebExchange;
 import reactor.core.publisher.Mono;
 
+import java.time.Duration;
 import java.time.Instant;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicLong;
 
 @Component
@@ -29,6 +34,16 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
     private final RateLimiterService rateLimiterService;
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
+    private final MeterRegistry meterRegistry;
+
+    /** Tenant tag for the IP-limited unauthenticated paths, which carry no tenant. */
+    static final String UNAUTHENTICATED = "unauthenticated";
+
+    /** Histogram buckets for gateway_request_duration_seconds, from a cache hit to a slow upstream. */
+    private static final Duration[] LATENCY_BUCKETS = {
+            Duration.ofMillis(5), Duration.ofMillis(10), Duration.ofMillis(25), Duration.ofMillis(50),
+            Duration.ofMillis(100), Duration.ofMillis(250), Duration.ofMillis(500),
+            Duration.ofSeconds(1), Duration.ofMillis(2500)};
 
     /**
      * Unauthenticated paths that still need a limit. These carry no tenant context, so
@@ -57,12 +72,16 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
                             long retryAfter = retryAfterSeconds(result.resetMs());
                             addLimitHeaders(exchange, result.resetMs(), retryAfter, true);
                             log.warn("Rate limited unauthenticated request from {} to {}", ip, path);
+                            recordMetrics(UNAUTHENTICATED, "blocked", System.currentTimeMillis() - startTime);
                             return Mono.error(new RateLimitExceededException((int) retryAfter));
                         }
                         addLimitHeaders(exchange, result.resetMs(), 0, false);
                         exchange.getResponse().getHeaders()
                                 .set("X-RateLimit-Remaining", String.valueOf(result.remaining()));
-                        return chain.filter(exchange);
+                        AtomicLong firstByteAt = trackFirstByte(exchange);
+                        return chain.filter(exchange)
+                                .doOnSuccess(v -> recordMetrics(UNAUTHENTICATED, "allowed", latency(startTime, firstByteAt.get())))
+                                .doOnError(e -> recordMetrics(UNAUTHENTICATED, "error", latency(startTime, firstByteAt.get())));
                     });
         }
 
@@ -84,19 +103,52 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
                     exchange.getResponse().getHeaders()
                             .set("X-RateLimit-Remaining", String.valueOf(result.remaining()));
 
-                    // Latency is time to first byte: when the response starts, not when it
-                    // ends. Measured to the end, a dashboard's live event stream recorded
-                    // minutes of "latency" and dragged the average from ~10 ms to ~250 ms.
-                    AtomicLong firstByteAt = new AtomicLong();
-                    exchange.getResponse().beforeCommit(() -> {
-                        firstByteAt.compareAndSet(0, System.currentTimeMillis());
-                        return Mono.empty();
-                    });
+                    AtomicLong firstByteAt = trackFirstByte(exchange);
 
                     return chain.filter(exchange)
                             .doOnSuccess(v -> publishEvent(exchange, tenantId, userId, ip, startTime, firstByteAt.get(), "ALLOWED"))
                             .doOnError(e -> publishEvent(exchange, tenantId, userId, ip, startTime, firstByteAt.get(), "ERROR"));
                 });
+    }
+
+    /**
+     * Latency is time to first byte: when the response starts, not when it ends. Measured
+     * to the end, a dashboard's live event stream recorded minutes of "latency" and
+     * dragged the average from ~10 ms to ~250 ms.
+     */
+    private static AtomicLong trackFirstByte(ServerWebExchange exchange) {
+        AtomicLong firstByteAt = new AtomicLong();
+        exchange.getResponse().beforeCommit(() -> {
+            firstByteAt.compareAndSet(0, System.currentTimeMillis());
+            return Mono.empty();
+        });
+        return firstByteAt;
+    }
+
+    /** @param firstByteAt when the response was committed, or 0 to measure to now */
+    private static long latency(long startTime, long firstByteAt) {
+        return (firstByteAt > 0 ? firstByteAt : System.currentTimeMillis()) - startTime;
+    }
+
+    /**
+     * The Prometheus metrics behind the Grafana dashboard: gateway_requests_total and the
+     * gateway_request_duration_seconds histogram, by tenant and outcome. Never tagged by
+     * user or path: those are unbounded, and every value would become its own series.
+     */
+    private void recordMetrics(String tenant, String outcome, long latencyMs) {
+        Counter.builder("gateway.requests")
+                .description("Requests through the rate limiter")
+                .tag("tenant", tenant)
+                .tag("outcome", outcome)
+                .register(meterRegistry)
+                .increment();
+        Timer.builder("gateway.request.duration")
+                .description("Time to first byte, or to the rate-limit decision for blocked requests")
+                .tag("tenant", tenant)
+                .tag("outcome", outcome)
+                .serviceLevelObjectives(LATENCY_BUCKETS)
+                .register(meterRegistry)
+                .record(latencyMs, TimeUnit.MILLISECONDS);
     }
 
     private static long retryAfterSeconds(long resetMs) {
@@ -129,7 +181,8 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
      */
     private void publishEvent(ServerWebExchange exchange, String tenantId, String userId,
                                String ip, long startTime, long firstByteAt, String status) {
-        long latencyMs = (firstByteAt > 0 ? firstByteAt : System.currentTimeMillis()) - startTime;
+        long latencyMs = latency(startTime, firstByteAt);
+        recordMetrics(tenantId, status.toLowerCase(java.util.Locale.ROOT), latencyMs);
         String path    = exchange.getRequest().getURI().getPath();
         String method  = exchange.getRequest().getMethod().name();
         int httpStatus = exchange.getResponse().getStatusCode() != null

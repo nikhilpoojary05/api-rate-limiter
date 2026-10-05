@@ -7,10 +7,17 @@ scrape_configs:
     static_configs:
       - targets: ['localhost:9090']
 
+  # DNS discovery rather than a fixed target: with several gateway replicas
+  # (docker-compose.distributed.yml) "gateway-service" resolves to one address per
+  # replica, and a fixed target would scrape whichever one answered, mixing their
+  # counters. Each replica becomes its own target, labelled by instance.
   - job_name: 'gateway-service'
     metrics_path: '/actuator/prometheus'
-    static_configs:
-      - targets: ['gateway-service:9080']
+    dns_sd_configs:
+      - names: ['gateway-service']
+        type: A
+        port: 9080
+        refresh_interval: 15s
     scrape_interval: 5s
 
   - job_name: 'auth-service'
