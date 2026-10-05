@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      # The Redis tests start a redis:7 container through Testcontainers; the runner has Docker.
+      - name: Build and test
+        run: mvn -B -ntp verify
+
+      - name: Keep test reports
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: surefire-reports
+          path: '**/target/surefire-reports/'
+
+  e2e:
+    name: End to end, 3 gateways behind nginx
+    needs: test
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      COMPOSE: docker compose -f docker-compose.yml -f docker-compose.distributed.yml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+
+      - name: Build jars
+        run: mvn -B -ntp package -DskipTests
+
+      - name: Create .env with throwaway secrets
+        run: |
+          cp .env.example .env
+          jwt="$(openssl rand -base64 48 | tr -d '\n')"
+          pg="$(openssl rand -hex 24)"
+          redis="$(openssl rand -hex 24)"
+          grafana="$(openssl rand -hex 24)"
+          for v in "$jwt" "$pg" "$redis" "$grafana"; do echo "::add-mask::$v"; done
+          sed -i \
+            -e "s|^JWT_SECRET=.*|JWT_SECRET=$jwt|" \
+            -e "s|^POSTGRES_PASSWORD=.*|POSTGRES_PASSWORD=$pg|" \
+            -e "s|^REDIS_PASSWORD=.*|REDIS_PASSWORD=$redis|" \
+            -e "s|^GF_SECURITY_ADMIN_PASSWORD=.*|GF_SECURITY_ADMIN_PASSWORD=$grafana|" \
+            .env
+
+      - name: Start the stack
+        run: $COMPOSE up -d --build --wait --wait-timeout 300
+
+      - name: Smoke test
+        run: GATEWAY_URL=http://localhost:8080 bash .github/scripts/smoke-test.sh
+
+      # 50 users x 300 requests at concurrency 200, spread over the three gateways: every
+      # user must be admitted exactly their limit. Exits non-zero if any is off.
+      - name: Enforcement accuracy
+        run: |
+          set -a; . ./.env; set +a
+          GATEWAY_URL=http://localhost:8080 REDIS_HOST=localhost REDIS_PORT=6379 \
+            java loadtest/LoadTest.java accuracy-sw accuracy-tb
+
+      - name: Service logs
+        if: failure()
+        run: $COMPOSE logs --no-color --tail 200
+
+      - name: Stop the stack
+        if: always()
+        run: $COMPOSE down -v

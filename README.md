@@ -1,5 +1,7 @@
 # API Rate Limiter & Security Gateway
 
+[![CI](https://github.com/nikhilpoojary05/api-rate-limiter/actions/workflows/ci.yml/badge.svg)](https://github.com/nikhilpoojary05/api-rate-limiter/actions/workflows/ci.yml)
+
 A multi-tenant API gateway built on Spring Cloud Gateway. It authenticates every request
 with a JWT, enforces per-tenant rate limits with **sliding-window and token-bucket
 algorithms implemented as atomic Redis Lua scripts**, and gives each tenant's
@@ -268,6 +270,11 @@ Gateway properties:
 ```bash
 mvn test
 ```
+
+[CI](.github/workflows/ci.yml) runs them on every push, then starts the stack with three
+gateways behind nginx and runs an [end-to-end smoke test](.github/scripts/smoke-test.sh)
+(authentication, the exact limit, tenant isolation, refresh-token rotation) and the load
+test's accuracy scenarios, which fail the build if any user is admitted the wrong amount.
 
 80 tests across `common`, `gateway-service` and `admin-service`:
 

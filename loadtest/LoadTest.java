@@ -40,6 +40,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * DEMO_URL (http://localhost:8083), REDIS_HOST (localhost), REDIS_PORT (6379),
  * REDIS_PASSWORD, DURATION_SECONDS (20).
  * Arguments: scenario names to run a subset, e.g. "allowed-64 rejected".
+ * Exits 1 if an accuracy run admits any user the wrong amount or has failed requests.
  *
  * Caveat: this is a closed-loop generator — each worker waits for its response before
  * sending the next — so under saturation it under-reports tail latency (coordinated
@@ -54,6 +55,8 @@ public class LoadTest {
     static final String RUN = UUID.randomUUID().toString().substring(0, 8);
     /** Consecutive readiness passes needed: enough to reach every instance behind a balancer. */
     static final int READY_PASSES = 10;
+    /** Accuracy runs where a user was admitted the wrong amount or a request failed. */
+    static int accuracyFailures = 0;
 
     static final HttpClient HTTP = HttpClient.newBuilder()
             .version(HttpClient.Version.HTTP_1_1)
@@ -103,6 +106,12 @@ public class LoadTest {
             } finally {
                 fixture.restore();
             }
+        }
+        // A non-zero exit lets CI fail the build when enforcement drifts.
+        if (accuracyFailures > 0) {
+            System.err.printf("%nFAILED: %d accuracy run(s) admitted a user the wrong amount or had failed requests.%n",
+                    accuracyFailures);
+            System.exit(1);
         }
     }
 
@@ -233,6 +242,7 @@ public class LoadTest {
                 per.getMin(), per.getMax(), wrong, users);
         System.out.printf("    totals: %,d admitted, %,d rejected (429), %d other%n",
                 per.getSum(), rejected.get(), other.get());
+        if (wrong > 0 || other.get() > 0) accuracyFailures++;
     }
 
     static void waitForRules(Jwt jwt) throws Exception {
