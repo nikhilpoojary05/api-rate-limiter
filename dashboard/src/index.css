@@ -328,7 +328,9 @@ code, pre { font-family: var(--font-mono); }
 /* ===== KPI Cards ===== */
 .kpi-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  /* 170px fits the overview's five cards on one row at common laptop widths; at 220px
+     the fifth wrapped onto a row of its own. */
+  grid-template-columns: repeat(auto-fit, minmax(170px, 1fr));
   gap: 16px;
   margin-bottom: 24px;
 }

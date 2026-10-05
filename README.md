@@ -5,37 +5,42 @@ with a JWT, enforces per-tenant rate limits with **sliding-window and token-buck
 algorithms implemented as atomic Redis Lua scripts**, and gives each tenant's
 administrators a tenant-scoped admin API and a React dashboard with live traffic.
 
+![Dashboard under live traffic: one user runs into their limit and gets blocked requests while another stays under theirs](docs/images/dashboard-live.gif)
+
+*Live dashboard while john.doe (100 requests/min) exceeds his limit and jane.smith stays
+under hers: blocked requests in red, every figure read from the gateway's real traffic.*
+
 **Measured, not claimed** — details in [`loadtest/RESULTS.md`](loadtest/RESULTS.md):
 
-- **Exact enforcement under concurrency.** 15,000 requests from 50 users at concurrency 200:
-  every user was admitted exactly their limit, for both algorithms — 0 of 50 off by even one.
-- **Exact across instances.** The same test through nginx in front of three gateway
-  replicas sharing one Redis: still 0 of 50 users off-limit, for both algorithms.
-- **~4,700 req/s** through the full gateway path on a single laptop (i5-13420H), p50 3.4 ms
-  at concurrency 16. Laptop numbers: generator, gateway, upstream and Redis share one CPU.
-- **Profiled and tuned.** A Java Flight Recorder profile showed each JWT was verified six
-  times per request; verifying once cut its CPU share from 23% to 10% and raised
-  throughput 8% in a controlled A/B test.
-- **80 tests**, including concurrency tests that were deliberately broken to confirm they fail.
+| | Result |
+|---|---|
+| **Exact under concurrency** | 15,000 requests from 50 users at concurrency 200: every user admitted exactly their limit, both algorithms. **0 of 50 off by even one.** |
+| **Exact across instances** | The same test through nginx in front of **three gateway replicas** sharing one Redis: **0 of 50 off.** |
+| **Throughput** | **~4,700 req/s** through the full gateway path, p50 3.4 ms at concurrency 16, on one laptop (i5-13420H) that also runs the load generator, upstream and Redis. |
+| **Profiled and tuned** | Java Flight Recorder showed each JWT verified six times per request; verifying once cut its CPU share from 23% to 10% and raised throughput 8% in a controlled A/B test. |
+| **Tested** | **80 tests**, including concurrency tests broken on purpose to confirm they fail. |
 
 ---
 
 ## Architecture
 
-```
-                    ┌───────────────────── gateway-service :8080 ─────────────────────┐
-  client ──HTTP──▶  │ JWT verify ─▶ identity headers ─▶ rate limit (Redis Lua) ─▶ proxy│
-                    └─────────────────────────────┬──────────────────────────────────┘
-                                                  │ internal network only
-                     ┌────────────────┬───────────┴──────┬─────────────────┐
-                     ▼                ▼                  ▼                 ▼
-               auth-service     admin-service      demo-service          Redis
-               login, tokens    rules, tenants,    sample upstream     counters, rules,
-               registration     analytics, SSE                         traffic events
-                     │                │
-                     ▼                ▼
-               PostgreSQL        PostgreSQL
-            (ratelimiter_auth) (ratelimiter_admin)
+```mermaid
+flowchart TB
+    clients(["API clients"]) & dashboard(["React dashboard"]) --> lb["nginx<br/><i>distributed mode only</i>"]
+    lb --> gateways
+
+    subgraph gateways["gateway-service × 1–3"]
+        direction LR
+        jwt["Verify JWT<br/>once per request"] --> ids["Set identity<br/>headers"] --> limit["Rate limit<br/>atomic Lua script"] --> proxy["Proxy"]
+    end
+
+    gateways <-->|"limit check in one atomic call,<br/>clock from Redis TIME"| redis[("Redis<br/>limiter state · rules · traffic events")]
+    gateways --> auth["auth-service<br/>login · token rotation"] & admin["admin-service<br/>rules · tenants · analytics · live stream"] & demo["demo-service<br/>sample upstream"]
+    admin <-->|"publishes rules,<br/>reads traffic events"| redis
+    auth --> pgauth[("PostgreSQL<br/>ratelimiter_auth")]
+    admin --> pgadmin[("PostgreSQL<br/>ratelimiter_admin")]
+
+    style lb stroke-dasharray: 5 5
 ```
 
 | Module | Port | Role |
@@ -184,6 +189,12 @@ npm run dev
 
 Opens on http://localhost:3000 and proxies `/api` to the gateway on 8080. If the gateway is
 on another port, start it with `GATEWAY_URL=http://localhost:<port> npm run dev`.
+
+![Analytics page: allowed and blocked requests over the last hour, with totals, block rate and latency](docs/images/analytics.png)
+
+Every figure comes from the admin API: summary cards, traffic over time for 1 h to 7 d,
+traffic share per tenant and the latest events. A tenant administrator sees only their
+own tenant.
 
 ---
 
