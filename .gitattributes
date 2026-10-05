@@ -1,0 +1,8 @@
+# Files that run on Linux (CI runners, containers) keep LF line endings whatever the
+# committer's settings. A CRLF shell script fails on Linux bash, and Git Bash on Windows
+# ignores the CRs, so the problem would not show locally.
+*.sh       text eol=lf
+*.lua      text eol=lf
+*.conf     text eol=lf
+*.sql      text eol=lf
+Dockerfile text eol=lf
