@@ -31,6 +31,11 @@ public class SecurityConfig {
                     "/auth/login",
                     "/auth/register",
                     "/auth/refresh",
+                    // Logout used to be missing here, and this service has no filter that
+                    // authenticates requests, so every logout got 403: the dashboard cleared
+                    // its own state while the refresh token stayed valid for seven days.
+                    // Logout is authorized by the refresh token it presents, which it revokes.
+                    "/auth/logout",
                     "/auth/me",
                     "/actuator/**",
                     "/swagger-ui/**",

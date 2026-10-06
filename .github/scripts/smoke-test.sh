@@ -67,6 +67,10 @@ cp "$JAR/jane" "$JAR/jane-old"
 check "refresh token issues a new access token" 200 \
   "$(status -b "$JAR/jane" -c "$JAR/jane" -X POST "$G/api/auth/refresh")"
 check "a used refresh token is rejected" 400 "$(status -b "$JAR/jane-old" -X POST "$G/api/auth/refresh")"
+# admin's session is untouched so far: only the logout itself can revoke its token.
+# (jane's replay above already revoked every token she had.)
+check "logout succeeds" 200 "$(status -b "$JAR/admin" -X POST "$G/api/auth/logout")"
+check "a logged-out refresh token is rejected" 400 "$(status -b "$JAR/admin" -X POST "$G/api/auth/refresh")"
 
 if [ "$failures" -gt 0 ]; then
   echo "$failures check(s) failed"

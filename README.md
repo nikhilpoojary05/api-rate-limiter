@@ -20,7 +20,7 @@ under hers: blocked requests in red, every figure read from the gateway's real t
 | **Exact across instances** | The same test through nginx in front of **three gateway replicas** sharing one Redis: **0 of 50 off.** |
 | **Throughput** | **~4,700 req/s** through the full gateway path, p50 3.4 ms at concurrency 16, on one laptop (i5-13420H) that also runs the load generator, upstream and Redis. |
 | **Profiled and tuned** | Java Flight Recorder showed each JWT verified six times per request; verifying once cut its CPU share from 23% to 10% and raised throughput 8% in a controlled A/B test. |
-| **Tested** | **80 tests**, including concurrency tests broken on purpose to confirm they fail. |
+| **Tested** | **102 tests**, including concurrency tests broken on purpose to confirm they fail. |
 
 ---
 
@@ -304,7 +304,7 @@ gateways behind nginx and runs an [end-to-end smoke test](.github/scripts/smoke-
 exactly in Prometheus, traces crossing services in Zipkin) and the load test's accuracy
 scenarios, which fail the build if any user is admitted the wrong amount.
 
-80 tests across `common`, `gateway-service` and `admin-service`:
+102 tests across `common`, `gateway-service`, `admin-service` and `auth-service`:
 
 - **Limiters against a real Redis** — exact limits, window sliding, refill at the configured
   rate, capacity caps, and 300 concurrent requests in a single frozen millisecond admitting
@@ -318,6 +318,10 @@ scenarios, which fail the build if any user is admitted the wrong amount.
   access refused on every path, super-admin allowed, the live stream closed to non-admins.
 - **Admin data** — traffic time series bucketed with empty periods filled, unknown ranges
   rejected; new tenants get a server-generated API key and duplicate IDs are refused.
+- **Authentication, against real PostgreSQL and Redis** — login failures indistinguishable,
+  lockout after five failures, registration only with the tenant's code, refresh-token
+  rotation, and a replayed token revoking the user's every token even though the request
+  that detects it fails. Writing them found that logout had always returned 403.
 
 Every security and concurrency guard was checked by breaking it on purpose and confirming a
 test fails. That caught a concurrency test that could never have failed, and a missing test
@@ -354,8 +358,6 @@ original rules and deletes everything it created. Method, full results and cavea
 
 Stated plainly, so nobody finds them the hard way:
 
-- **auth-service has no automated tests.** Its refresh-token rotation is transactional, and
-  a test worth having needs a real Postgres.
 - **Registration reveals** whether a username or email is already taken. Closing that needs
   an email-confirmation flow, which this has no mail transport for; `emailVerified` is
   recorded but not enforced.
