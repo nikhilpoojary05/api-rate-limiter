@@ -1,3 +1,5 @@
+# Image versions are pinned to the ones the stack, CI and dashboards were verified
+# against; ":latest" could change underneath them at any pull.
 services:
   # ─── Infrastructure ───────────────────────────────────────────────────────────
 
@@ -63,7 +65,7 @@ services:
           memory: 512M
         reservations:
           memory: 128M
-    image: openzipkin/zipkin:latest
+    image: openzipkin/zipkin:3.6.1
     container_name: rl-zipkin
     restart: unless-stopped
     ports:
@@ -85,7 +87,7 @@ services:
           memory: 512M
         reservations:
           memory: 128M
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.15.0
     container_name: rl-prometheus
     restart: unless-stopped
     ports:
@@ -114,7 +116,7 @@ services:
           memory: 512M
         reservations:
           memory: 128M
-    image: grafana/grafana:latest
+    image: grafana/grafana:13.2.3
     container_name: rl-grafana
     restart: unless-stopped
     ports:
