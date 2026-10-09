@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { recordQuota } from '../lib/quota';
 
 // Everything goes through the gateway, which is what enforces authentication and
 // rate limiting. Talking to auth-service and admin-service directly bypassed both.
@@ -21,10 +22,14 @@ api.interceptors.request.use(
   (error) => Promise.reject(error)
 );
 
-// Response interceptor: handle 401
+// Response interceptor: record the caller's quota, handle 401
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    recordQuota(response);
+    return response;
+  },
   async (error) => {
+    recordQuota(error.response);  // a 429 carries the quota headers too
     const originalRequest = error.config;
     if (error.response?.status === 401 && !originalRequest._retry) {
       originalRequest._retry = true;
@@ -73,6 +78,13 @@ export const analyticsApi = {
     api.get('/admin/analytics/timeseries', { params: { tenantId, range } }),
   getRecentEvents: (tenantId, page = 0, size = 50) =>
     api.get('/admin/analytics/events', { params: { tenantId, page, size } }),
+};
+
+// ─── Demo upstream (request playground) ──────────────────────────────────────
+// Ordinary requests through the gateway as the signed-in user; they count against
+// that user's limit like any other client's.
+export const demoApi = {
+  send: (path) => api.get(path),
 };
 
 // ─── Rules ────────────────────────────────────────────────────────────────────

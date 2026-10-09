@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { analyticsApi, tenantsApi, errorMessage } from '../services/api';
 import { RANGES, RANGE_KEYS, toChartPoints, totals } from '../lib/timeseries';
+import { useChartColors } from '../lib/theme';
 import { BarChart2, Clock, TrendingUp, ShieldAlert, AlertCircle } from 'lucide-react';
 import {
   AreaChart, Area, BarChart, Bar, XAxis, YAxis,
@@ -12,7 +13,6 @@ import { format } from 'date-fns';
 // traffic (tens of thousands of requests, invented users and IPs) whenever a request
 // failed, and always for the traffic-share chart.
 
-const COLORS_PIE = ['#3b82f6', '#8b5cf6', '#10b981', '#f59e0b', '#ef4444', '#06b6d4'];
 
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
@@ -29,6 +29,9 @@ const CustomTooltip = ({ active, payload, label }) => {
 };
 
 export default function AnalyticsPage() {
+  // Theme colours: green for allowed and red for blocked, as everywhere else.
+  const colors = useChartColors();
+  const pie = [colors.accent, colors.secondary, colors.cyan, colors.warning, colors.allowed, colors.blocked];
   const [range, setRange] = useState('24h');
   const [tenants, setTenants] = useState([]);
   const [tenantFilter, setTenantFilter] = useState('');
@@ -147,21 +150,21 @@ export default function AnalyticsPage() {
           <AreaChart data={chartData}>
             <defs>
               <linearGradient id="analGradAllowed" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#3b82f6" stopOpacity={0.25} />
-                <stop offset="95%" stopColor="#3b82f6" stopOpacity={0} />
+                <stop offset="5%" stopColor={colors.allowed} stopOpacity={0.25} />
+                <stop offset="95%" stopColor={colors.allowed} stopOpacity={0} />
               </linearGradient>
               <linearGradient id="analGradBlocked" x1="0" y1="0" x2="0" y2="1">
-                <stop offset="5%" stopColor="#ef4444" stopOpacity={0.25} />
-                <stop offset="95%" stopColor="#ef4444" stopOpacity={0} />
+                <stop offset="5%" stopColor={colors.blocked} stopOpacity={0.25} />
+                <stop offset="95%" stopColor={colors.blocked} stopOpacity={0} />
               </linearGradient>
             </defs>
-            <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" vertical={false} />
-            <XAxis dataKey="time" stroke="var(--text-muted)" tick={{ fontSize: 11 }} minTickGap={24} />
-            <YAxis stroke="var(--text-muted)" tick={{ fontSize: 11 }} allowDecimals={false} />
+            <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
+            <XAxis dataKey="time" stroke={colors.axis} tick={{ fontSize: 11 }} minTickGap={24} />
+            <YAxis stroke={colors.axis} tick={{ fontSize: 11 }} allowDecimals={false} />
             <Tooltip content={<CustomTooltip />} />
             <Legend wrapperStyle={{ fontSize: '12px', color: 'var(--text-secondary)' }} />
-            <Area type="monotone" dataKey="allowed" name="Allowed" stroke="#3b82f6" fill="url(#analGradAllowed)" strokeWidth={2} dot={false} />
-            <Area type="monotone" dataKey="blocked" name="Blocked" stroke="#ef4444" fill="url(#analGradBlocked)" strokeWidth={2} dot={false} />
+            <Area type="monotone" dataKey="allowed" name="Allowed" stroke={colors.allowed} fill="url(#analGradAllowed)" strokeWidth={2} dot={false} />
+            <Area type="monotone" dataKey="blocked" name="Blocked" stroke={colors.blocked} fill="url(#analGradBlocked)" strokeWidth={2} dot={false} />
           </AreaChart>
         </ResponsiveContainer>
       </div>
@@ -175,11 +178,11 @@ export default function AnalyticsPage() {
           </div>
           <ResponsiveContainer width="100%" height={200}>
             <BarChart data={chartData}>
-              <CartesianGrid strokeDasharray="3 3" stroke="var(--border-subtle)" vertical={false} />
-              <XAxis dataKey="time" stroke="var(--text-muted)" tick={{ fontSize: 10 }} minTickGap={24} />
-              <YAxis stroke="var(--text-muted)" tick={{ fontSize: 11 }} unit="ms" />
+              <CartesianGrid strokeDasharray="3 3" stroke={colors.grid} vertical={false} />
+              <XAxis dataKey="time" stroke={colors.axis} tick={{ fontSize: 10 }} minTickGap={24} />
+              <YAxis stroke={colors.axis} tick={{ fontSize: 11 }} unit="ms" />
               <Tooltip content={<CustomTooltip />} />
-              <Bar dataKey="latency" name="Latency (ms)" fill="#8b5cf6" radius={[4, 4, 0, 0]} />
+              <Bar dataKey="latency" name="Latency (ms)" fill={colors.accent} radius={[4, 4, 0, 0]} />
             </BarChart>
           </ResponsiveContainer>
         </div>
@@ -201,7 +204,7 @@ export default function AnalyticsPage() {
             <ResponsiveContainer width="100%" height={200}>
               <PieChart>
                 <Pie data={share} dataKey="value" nameKey="name" cx="50%" cy="50%" outerRadius={80} innerRadius={45} paddingAngle={3}>
-                  {share.map((_, i) => <Cell key={i} fill={COLORS_PIE[i % COLORS_PIE.length]} />)}
+                  {share.map((_, i) => <Cell key={i} fill={pie[i % pie.length]} />)}
                 </Pie>
                 <Tooltip content={<CustomTooltip />} />
                 <Legend wrapperStyle={{ fontSize: '12px', color: 'var(--text-secondary)' }} />

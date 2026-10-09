@@ -1,4 +1,5 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
+import { useEffect, useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import Sidebar from './components/Sidebar';
 import PageHeader from './components/PageHeader';
@@ -8,15 +9,21 @@ import RulesPage from './pages/RulesPage';
 import TenantsPage from './pages/TenantsPage';
 import AnalyticsPage from './pages/AnalyticsPage';
 
-const PAGE_META = {
-  '/dashboard': { title: 'Overview Dashboard', subtitle: 'Real-time gateway metrics and live traffic' },
-  '/analytics': { title: 'Deep Analytics', subtitle: 'Traffic patterns, latency, and blocked requests' },
-  '/rules': { title: 'Rate Limit Rules', subtitle: 'Manage per-tenant and per-tier policies' },
-  '/tenants': { title: 'Tenant Management', subtitle: 'Organizations and rate limit tiers' },
+// Breadcrumb names; each page renders its own heading.
+const PAGE_NAMES = {
+  '/dashboard': 'Overview',
+  '/analytics': 'Analytics',
+  '/rules': 'Rate limit rules',
+  '/tenants': 'Tenants',
 };
 
 function ProtectedLayout({ children }) {
   const { user, loading } = useAuth();
+  const location = useLocation();
+  const [navOpen, setNavOpen] = useState(false);
+
+  // The mobile drawer closes whenever the page changes.
+  useEffect(() => setNavOpen(false), [location.pathname]);
 
   if (loading) {
     return (
@@ -40,14 +47,12 @@ function ProtectedLayout({ children }) {
 
   if (!user) return <Navigate to="/login" replace />;
 
-  const path = window.location.pathname;
-  const meta = PAGE_META[path] || {};
-
   return (
     <div className="app-layout">
-      <Sidebar />
+      <Sidebar open={navOpen} onClose={() => setNavOpen(false)} />
+      {navOpen && <div className="sidebar-backdrop" onClick={() => setNavOpen(false)} />}
       <main className="main-content">
-        <PageHeader title={meta.title} subtitle={meta.subtitle} />
+        <PageHeader page={PAGE_NAMES[location.pathname]} onMenu={() => setNavOpen(true)} />
         {children}
       </main>
     </div>
