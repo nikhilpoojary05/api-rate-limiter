@@ -73,7 +73,9 @@ For each request the gateway:
 4. **Runs the limiter as a single Lua script**, so check-and-increment is atomic: concurrent
    requests cannot all see "under the limit" and all get in. The script takes the time
    from Redis (`TIME`), not from the gateway, so several gateway instances on different
-   servers agree on the window even when their clocks drift.
+   servers agree on the window even when their clocks drift. Run as separate commands instead, the same
+   algorithm let one bursting user through up to 57% over the limit; see
+   [why the limiter is a Lua script](docs/why-atomic.md).
 5. Returns `429 Too Many Requests` with `Retry-After`, or proxies the request.
 
 **Sliding window** — a sorted set per `tenant:user`, scored by timestamp. Each entry's member
