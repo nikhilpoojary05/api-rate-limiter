@@ -1,0 +1,24 @@
+# Production front door: serves the built dashboard and proxies the API to the gateway,
+# with automatic HTTPS from Let's Encrypt. See docs/deploy.md.
+#
+#   DOMAIN         your domain, e.g. ratelimiter.example.com
+#   GATEWAY        where the gateway listens (default localhost:8080)
+#   DASHBOARD_DIR  the dashboard's build output (default /srv/dashboard)
+{$DOMAIN} {
+	encode gzip
+
+	handle /api/* {
+		# Caddy replaces any X-Forwarded-For a client sends with the real client address,
+		# which the gateway trusts in production (docker-compose.prod.yml).
+		reverse_proxy {$GATEWAY:localhost:8080} {
+			# Pass the dashboard's live event stream through as events arrive.
+			flush_interval -1
+		}
+	}
+
+	handle {
+		root * {$DASHBOARD_DIR:/srv/dashboard}
+		try_files {path} /index.html
+		file_server
+	}
+}

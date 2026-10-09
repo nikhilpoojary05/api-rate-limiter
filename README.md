@@ -169,6 +169,8 @@ distributed file. The gateway is still reached on the same port, now through ngi
 docker compose -f docker-compose.yml -f docker-compose.distributed.yml up -d --build
 ```
 
+To put it online as a public demo with HTTPS, see the [deployment guide](docs/deploy.md).
+
 ### 2b. Local, on Windows (how this was developed)
 
 Needs Java 21+, Maven 3.9+, PostgreSQL and Redis running locally.
