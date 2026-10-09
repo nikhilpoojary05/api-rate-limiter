@@ -89,7 +89,7 @@ key's TTL to a full refill so an idle bucket cannot reset to full early.
 | Situation | Behaviour |
 |---|---|
 | No rule for the tenant/tier | A default limit (60/min), not unlimited access |
-| Redis unreachable | Fail closed — deny (`ratelimit.fail-open=true` to invert) |
+| Redis unreachable | Fail closed — deny at once, within milliseconds (`ratelimit.fail-open=true` to invert); service resumes within seconds of Redis returning |
 | Unauthenticated `/api/auth/**` | Limited per source IP (20/min), so login can't be brute-forced |
 
 ---
@@ -311,7 +311,12 @@ scenarios, which fail the build if any user is admitted the wrong amount.
   exactly the limit. Time is driven by an injectable clock, so nothing sleeps.
 - **Several instances** — gateways whose clocks disagree over-admit when each passes its
   own time; on Redis's clock, three instances admit exactly the limit between them.
-- **Failure handling** — both limiters deny when Redis is unreachable.
+- **Failure handling** — both limiters deny when Redis is unreachable. CI also runs a
+  [chaos test](.github/scripts/chaos-test.sh) that stops Redis under live traffic: no
+  request may get through, every answer must be prompt, and service must resume. Its first
+  run found requests hanging for over 10 s during an outage, because the Redis client
+  queued commands while disconnected; it now rejects them at once (29 ms worst case) and
+  recovers 3 s after Redis returns.
 - **Identity** — forged and expired tokens rejected, client-supplied identity headers
   discarded, one JWT parse per request.
 - **Authorization matrix** — the real admin security chain with signed tokens: cross-tenant

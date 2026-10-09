@@ -25,6 +25,10 @@ spring:
     redis:
       host: ${REDIS_HOST:localhost}
       port: ${REDIS_PORT:6379}
+      # Short, so a Redis outage fails requests closed at once instead of holding them
+      # (see RedisConfig). Redis normally answers in well under a millisecond.
+      timeout: ${REDIS_TIMEOUT:1s}
+      connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
 
 security:
   hsts:

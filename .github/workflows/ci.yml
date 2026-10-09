@@ -91,6 +91,11 @@ jobs:
           GATEWAY_URL=http://localhost:8080 REDIS_HOST=localhost REDIS_PORT=6379 \
             java loadtest/LoadTest.java accuracy-sw accuracy-tb
 
+      # Last, because it stops Redis: under live traffic nothing may get through while
+      # Redis is down, every answer must be prompt, and service must resume.
+      - name: Chaos, Redis outage
+        run: GATEWAY_URL=http://localhost:8080 bash .github/scripts/chaos-test.sh
+
       - name: Service logs
         if: failure()
         run: $COMPOSE logs --no-color --tail 200
