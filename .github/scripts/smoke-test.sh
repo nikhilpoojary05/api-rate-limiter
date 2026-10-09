@@ -71,6 +71,11 @@ check "an expensive endpoint uses 5 units of the limit" 5 "$((before - after))"
 check "the cost is reported to the client" 5 \
   "$(header x-ratelimit-cost "$G/api/demo/slow" -H "Authorization: Bearer $JANE")"
 
+# API keys: the seeded demo key for beta-inc, stored only as a hash.
+check "an API key reaches the API" 200 "$(status "$G/api/demo/ping" -H 'X-API-Key: api_key_beta_456')"
+check "an unknown API key is refused" 401 "$(status "$G/api/demo/ping" -H 'X-API-Key: not-a-real-key')"
+check "an API key cannot use the admin API" 403 "$(status "$G/api/admin/rules" -H 'X-API-Key: api_key_beta_456')"
+
 check "regular user is refused on the admin API" 403 "$(status "$G/api/admin/rules" -H "Authorization: Bearer $JANE")"
 check "admin can use the admin API" 200 "$(status "$G/api/admin/rules" -H "Authorization: Bearer $ADMIN")"
 

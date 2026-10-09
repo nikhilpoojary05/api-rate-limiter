@@ -24,8 +24,12 @@ public class Tenant {
     @Column(nullable = false)
     private String name;
 
-    @Column(nullable = false)
-    private String apiKey;
+    /** SHA-256 of the API key, hex. The key itself is never stored (see ApiKeys). */
+    @Column(name = "api_key_hash", nullable = false, unique = true)
+    private String apiKeyHash;
+
+    @Column(name = "api_key_prefix", nullable = false)
+    private String apiKeyPrefix;
 
     @Column(nullable = false)
     private String tier;

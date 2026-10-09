@@ -1,6 +1,9 @@
 package com.ratelimiter.gateway.filter;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ratelimiter.common.security.JwtUtils;
+import com.ratelimiter.gateway.support.TestRedis;
+import org.springframework.data.redis.core.ReactiveRedisTemplate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
@@ -34,6 +37,7 @@ class JwtAuthenticationFilterTest {
 
     private JwtUtils jwtUtils;
     private JwtAuthenticationFilter filter;
+    private ReactiveRedisTemplate<String, String> redis;
 
     /** Captures what the filter forwards downstream; null means the chain was never called. */
     private final AtomicReference<ServerHttpRequest> forwarded = new AtomicReference<>();
@@ -45,7 +49,8 @@ class JwtAuthenticationFilterTest {
     @BeforeEach
     void setUp() {
         jwtUtils = jwtUtils(SECRET, 900_000);
-        filter = new JwtAuthenticationFilter(jwtUtils);
+        redis = TestRedis.template();
+        filter = new JwtAuthenticationFilter(jwtUtils, redis, new ObjectMapper());
         forwarded.set(null);
     }
 
@@ -181,7 +186,7 @@ class JwtAuthenticationFilterTest {
     @DisplayName("an authenticated request parses the token exactly once")
     void parsesTokenOnce() {
         JwtUtils counting = spy(jwtUtils);
-        filter = new JwtAuthenticationFilter(counting);
+        filter = new JwtAuthenticationFilter(counting, redis, new ObjectMapper());
         String jwt = token(jwtUtils, "acme-corp", List.of("ROLE_USER"));
 
         run(MockServerHttpRequest.get("/api/demo/ping")
@@ -189,5 +194,57 @@ class JwtAuthenticationFilterTest {
 
         assertThat(forwarded.get()).isNotNull();
         verify(counting, times(1)).parseToken(anyString());
+    }
+
+    // ---- API keys ------------------------------------------------------------------
+
+    /** Publishes a key the way the admin service does: only its hash, in the apikeys hash. */
+    private String publishKey(String tenant, String tier) {
+        String key = "test-key-" + java.util.UUID.randomUUID();
+        redis.opsForHash().put(JwtAuthenticationFilter.API_KEYS, JwtAuthenticationFilter.sha256Hex(key),
+                "{\"tenantId\":\"" + tenant + "\",\"tier\":\"" + tier + "\"}").block(Duration.ofSeconds(5));
+        return key;
+    }
+
+    @Test
+    @DisplayName("a published API key acts as its tenant, as an API client, and is not forwarded")
+    void apiKeyActsAsTenant() {
+        String key = publishKey("beta-inc", "TIER_B");
+
+        run(MockServerHttpRequest.get("/api/demo/ping")
+                .header(JwtAuthenticationFilter.API_KEY_HEADER, key)
+                .header("X-User-Roles", "ROLE_SUPER_ADMIN")
+                .build());
+
+        HttpHeaders headers = forwarded.get().getHeaders();
+        assertThat(headers.getFirst("X-Tenant-Id")).isEqualTo("beta-inc");
+        assertThat(headers.getFirst("X-User-Tier")).isEqualTo("TIER_B");
+        assertThat(headers.get("X-User-Roles")).containsExactly(JwtAuthenticationFilter.API_CLIENT_ROLE);
+        assertThat(headers.getFirst("X-User-Id")).startsWith("apikey:");
+        assertThat(headers.containsKey(JwtAuthenticationFilter.API_KEY_HEADER)).isFalse();
+    }
+
+    @Test
+    @DisplayName("an unknown API key is refused")
+    void unknownApiKeyRefused() {
+        MockServerWebExchange exchange = run(MockServerHttpRequest.get("/api/demo/ping")
+                .header(JwtAuthenticationFilter.API_KEY_HEADER, "not-a-real-key").build());
+
+        assertThat(exchange.getResponse().getStatusCode()).isEqualTo(HttpStatus.UNAUTHORIZED);
+        assertThat(forwarded.get()).isNull();
+    }
+
+    @Test
+    @DisplayName("with both a token and an API key, the token decides and the key is dropped")
+    void tokenWinsOverApiKey() {
+        String key = publishKey("beta-inc", "TIER_B");
+        String jwt = token(jwtUtils, "acme-corp", List.of("ROLE_USER"));
+
+        run(MockServerHttpRequest.get("/api/demo/ping")
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + jwt)
+                .header(JwtAuthenticationFilter.API_KEY_HEADER, key).build());
+
+        assertThat(forwarded.get().getHeaders().getFirst("X-Tenant-Id")).isEqualTo("acme-corp");
+        assertThat(forwarded.get().getHeaders().containsKey(JwtAuthenticationFilter.API_KEY_HEADER)).isFalse();
     }
 }

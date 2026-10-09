@@ -3,22 +3,20 @@ package com.ratelimiter.admin.service;
 import com.ratelimiter.admin.dto.TenantDto;
 import com.ratelimiter.admin.entity.Tenant;
 import com.ratelimiter.admin.repository.TenantRepository;
+import com.ratelimiter.admin.security.ApiKeys;
 import com.ratelimiter.admin.security.TenantAccess;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
 
-import java.security.SecureRandom;
-import java.util.Base64;
 import java.util.List;
 import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
 public class TenantService {
-    private static final SecureRandom RANDOM = new SecureRandom();
-
     private final TenantRepository repository;
     private final TenantAccess tenantAccess;
+    private final ApiKeyPublisher apiKeyPublisher;
 
     public List<TenantDto> getAllTenants() {
         String scope = tenantAccess.resolveScope(null);
@@ -44,17 +42,37 @@ public class TenantService {
         if (repository.findByTenantId(dto.getTenantId()).isPresent()) {
             throw new IllegalArgumentException("Tenant ID already exists");
         }
+        // Generated here, never taken from the request: a caller must not be able to
+        // choose a tenant's key.
+        String apiKey = ApiKeys.generate();
         Tenant tenant = Tenant.builder()
                 .tenantId(dto.getTenantId())
                 .name(dto.getName())
-                // Generated here, never taken from the request: the column is NOT NULL and
-                // no client sent one, so every create failed; and a caller must not be
-                // able to choose a tenant's key.
-                .apiKey(newApiKey())
+                .apiKeyHash(ApiKeys.hash(apiKey))
+                .apiKeyPrefix(ApiKeys.prefix(apiKey))
                 .tier(dto.getTier())
                 .active(dto.isActive())
                 .build();
-        return mapToDto(repository.save(tenant));
+        TenantDto created = mapToDto(repository.save(tenant));
+        apiKeyPublisher.publish();
+        created.setApiKey(apiKey);  // the only time the full key is returned
+        return created;
+    }
+
+    /**
+     * Replaces the tenant's API key; the old one stops working as soon as the gateway
+     * sees the new set. The new key is returned this once and cannot be read back.
+     */
+    public TenantDto rotateApiKey(Long id) {
+        Tenant tenant = repository.findById(id).orElseThrow(() -> new RuntimeException("Tenant not found"));
+        tenantAccess.requireAccessTo(tenant.getTenantId());
+        String apiKey = ApiKeys.generate();
+        tenant.setApiKeyHash(ApiKeys.hash(apiKey));
+        tenant.setApiKeyPrefix(ApiKeys.prefix(apiKey));
+        TenantDto rotated = mapToDto(repository.save(tenant));
+        apiKeyPublisher.publish();
+        rotated.setApiKey(apiKey);
+        return rotated;
     }
 
     public TenantDto updateTenant(Long id, TenantDto dto) {
@@ -63,7 +81,9 @@ public class TenantService {
         tenant.setName(dto.getName());
         tenant.setTier(dto.getTier());
         tenant.setActive(dto.isActive());
-        return mapToDto(repository.save(tenant));
+        TenantDto updated = mapToDto(repository.save(tenant));
+        apiKeyPublisher.publish();  // a deactivated tenant's key must stop working
+        return updated;
     }
 
     public void deleteTenant(Long id) {
@@ -71,31 +91,18 @@ public class TenantService {
         tenantAccess.requireAccessTo(tenant.getTenantId());
         tenant.setActive(false);
         repository.save(tenant);
+        apiKeyPublisher.publish();
     }
 
-    /** Shows enough of a key to identify it, never enough to use it. */
-    private static String newApiKey() {
-        byte[] bytes = new byte[32];
-        RANDOM.nextBytes(bytes);
-        return "rk_" + Base64.getUrlEncoder().withoutPadding().encodeToString(bytes);
-    }
-
-    private static String mask(String apiKey) {
-        if (apiKey == null || apiKey.isBlank()) {
-            return null;
-        }
-        int keep = Math.min(4, apiKey.length());
-        return apiKey.substring(0, keep) + "****";
-    }
 
     private TenantDto mapToDto(Tenant entity) {
         TenantDto dto = new TenantDto();
         dto.setId(entity.getId());
         dto.setTenantId(entity.getTenantId());
         dto.setName(entity.getName());
-        // Never return the raw API key. It is stored in plaintext today, so listing
-        // tenants previously handed every key to anyone who could call the endpoint.
-        dto.setApiKey(mask(entity.getApiKey()));
+        // Only the prefix: the key itself is not stored, and is returned in full only by
+        // create and rotate.
+        dto.setApiKey(entity.getApiKeyPrefix() + "****");
         dto.setTier(entity.getTier());
         dto.setActive(entity.isActive());
         return dto;

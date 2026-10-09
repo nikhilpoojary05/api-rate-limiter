@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { tenantsApi, errorMessage } from '../services/api';
-import { Building2, Plus, Pencil, X, AlertCircle, CheckCircle } from 'lucide-react';
+import { Building2, Plus, Pencil, X, AlertCircle, CheckCircle, Key, Copy } from 'lucide-react';
 
 const TIERS = ['TIER_FREE', 'TIER_A', 'TIER_B', 'TIER_ENTERPRISE'];
 const TIER_COLORS = { TIER_FREE: 'gray', TIER_A: 'blue', TIER_B: 'purple', TIER_ENTERPRISE: 'cyan' };
@@ -20,7 +20,9 @@ function TenantModal({ tenant, onClose, onSave }) {
       if (tenant) {
         await tenantsApi.update(tenant.id, { name: form.name, tier: form.tier, active: form.active });
       } else {
-        await tenantsApi.create({ tenantId: form.tenantId, name: form.name, tier: form.tier, active: form.active });
+        const res = await tenantsApi.create({ tenantId: form.tenantId, name: form.name, tier: form.tier, active: form.active });
+        onSave(res.data);  // carries the new API key, shown once
+        return;
       }
       onSave();
     } catch (err) {
@@ -89,6 +91,19 @@ export default function TenantsPage() {
   const [showModal, setShowModal] = useState(false);
   const [editTenant, setEditTenant] = useState(null);
   const [loadError, setLoadError] = useState('');
+  // A key is only ever returned by create or rotate, so it is shown here once.
+  const [newKey, setNewKey] = useState(null);
+
+  const rotateKey = async (tenant) => {
+    if (!confirm(`Issue a new API key for ${tenant.tenantId}? The current key stops working immediately.`)) return;
+    try {
+      const res = await tenantsApi.rotateApiKey(tenant.id);
+      setNewKey({ tenantId: tenant.tenantId, apiKey: res.data.apiKey });
+      fetchTenants();
+    } catch (err) {
+      alert(errorMessage(err, 'Failed to rotate the API key'));
+    }
+  };
 
   const fetchTenants = () => {
     setLoading(true);
@@ -116,6 +131,19 @@ export default function TenantsPage() {
         </button>
       </div>
 
+      {newKey && (
+        <div style={{ background: 'var(--accent-success-glow, rgba(16,185,129,0.12))', border: '1px solid rgba(16,185,129,0.35)', borderRadius: 'var(--radius)', padding: '12px 14px', marginBottom: '16px', fontSize: '13px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px', color: 'var(--text-primary)', fontWeight: 600 }}>
+            <Key size={14} />New API key for {newKey.tenantId}: copy it now, it will not be shown again
+          </div>
+          <div style={{ display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' }}>
+            <code id="new-api-key" style={{ fontFamily: 'var(--font-mono)', background: 'var(--bg-elevated)', padding: '6px 10px', borderRadius: 'var(--radius)', wordBreak: 'break-all' }}>{newKey.apiKey}</code>
+            <button className="btn btn-secondary btn-sm" onClick={() => navigator.clipboard?.writeText(newKey.apiKey)}><Copy size={12} />Copy</button>
+            <button className="btn btn-secondary btn-sm" onClick={() => setNewKey(null)}>Done</button>
+          </div>
+        </div>
+      )}
+
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(320px, 1fr))', gap: '16px' }}>
         {loading ? (
           <div className="loading-overlay" style={{ gridColumn: '1/-1' }}><div className="spinner" /><span>Loading tenants...</span></div>
@@ -139,6 +167,10 @@ export default function TenantsPage() {
                   </div>
                 </div>
                 <div style={{ display: 'flex', gap: '6px' }}>
+                  <button className="btn btn-secondary btn-sm btn-icon" title="Issue a new API key"
+                    id={`rotate-key-${tenant.id}`} onClick={() => rotateKey(tenant)}>
+                    <Key size={12} />
+                  </button>
                   <button className="btn btn-secondary btn-sm btn-icon"
                     id={`edit-tenant-${tenant.id}`}
                     onClick={() => { setEditTenant(tenant); setShowModal(true); }}>
@@ -152,6 +184,9 @@ export default function TenantsPage() {
                 <span className={`badge ${tenant.active ? 'green' : 'gray'}`}>
                   {tenant.active ? <><CheckCircle size={10} /> Active</> : '○ Inactive'}
                 </span>
+              </div>
+              <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                API key <span style={{ fontFamily: 'var(--font-mono)' }}>{tenant.apiKey}</span>
               </div>
 
             </div>
@@ -179,7 +214,12 @@ export default function TenantsPage() {
         <TenantModal
           tenant={editTenant}
           onClose={() => { setShowModal(false); setEditTenant(null); }}
-          onSave={() => { setShowModal(false); setEditTenant(null); fetchTenants(); }}
+          onSave={(created) => {
+            setShowModal(false);
+            setEditTenant(null);
+            if (created?.apiKey) setNewKey({ tenantId: created.tenantId, apiKey: created.apiKey });
+            fetchTenants();
+          }}
         />
       )}
     </div>

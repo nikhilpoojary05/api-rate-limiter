@@ -91,6 +91,8 @@ export const tenantsApi = {
   getById: (id) => api.get(`/admin/tenants/${id}`),
   create: (tenant) => api.post('/admin/tenants', tenant),
   update: (id, tenant) => api.put(`/admin/tenants/${id}`, tenant),
+  // Returns the new key in full, this once; it cannot be read back afterwards.
+  rotateApiKey: (id) => api.post(`/admin/tenants/${id}/api-key`),
 };
 
 export default api;

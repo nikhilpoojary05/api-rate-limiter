@@ -47,6 +47,7 @@ class TenantScopedServicesTest {
     private TenantRepository tenants;
     private RuleService ruleService;
     private TenantService tenantService;
+    private ApiKeyPublisher apiKeyPublisher;
 
     @BeforeEach
     @SuppressWarnings("unchecked")
@@ -56,7 +57,8 @@ class TenantScopedServicesTest {
         TenantAccess access = new TenantAccess();
         ruleService = new RuleService(rules, mock(RedisTemplate.class, RETURNS_DEEP_STUBS),
                 new ObjectMapper(), access);
-        tenantService = new TenantService(tenants, access);
+        apiKeyPublisher = mock(ApiKeyPublisher.class);
+        tenantService = new TenantService(tenants, access, apiKeyPublisher);
 
         RateLimitRule acmeRule = RateLimitRule.builder().id(ACME_RULE_ID).tenantId("acme-corp")
                 .tier("TIER_A").algorithm("SLIDING_WINDOW").requestLimit(100).windowMs(60_000)
@@ -66,7 +68,7 @@ class TenantScopedServicesTest {
         when(rules.findAllByActive(anyBoolean())).thenReturn(List.of());
 
         Tenant acme = Tenant.builder().id(ACME_TENANT_ID).tenantId("acme-corp").name("Acme")
-                .apiKey("api_key_acme_123").tier("TIER_A").active(true).build();
+                .apiKeyHash(com.ratelimiter.admin.security.ApiKeys.hash("api_key_acme_123")).apiKeyPrefix("api_key_acme").tier("TIER_A").active(true).build();
         when(tenants.findById(ACME_TENANT_ID)).thenReturn(Optional.of(acme));
         when(tenants.save(any())).thenAnswer(inv -> inv.getArgument(0));
     }
@@ -193,7 +195,7 @@ class TenantScopedServicesTest {
         }
 
         @Test
-        @DisplayName("creates a tenant with a generated API key, ignoring any key sent")
+        @DisplayName("creates a tenant with a generated key, stores only its hash, returns it once")
         void createGeneratesApiKey() {
             TenantDto dto = new TenantDto();
             dto.setTenantId("new-co");
@@ -201,12 +203,32 @@ class TenantScopedServicesTest {
             dto.setTier("TIER_FREE");
             dto.setApiKey("chosen-by-caller");
 
-            tenantService.createTenant(dto);
+            TenantDto created = tenantService.createTenant(dto);
 
             org.mockito.ArgumentCaptor<Tenant> saved = org.mockito.ArgumentCaptor.forClass(Tenant.class);
             verify(tenants).save(saved.capture());
-            assertThat(saved.getValue().getApiKey()).startsWith("rk_").hasSizeGreaterThan(40)
-                    .isNotEqualTo("chosen-by-caller");
+            String key = created.getApiKey();
+            assertThat(key).startsWith("rk_").hasSizeGreaterThan(40).isNotEqualTo("chosen-by-caller");
+            assertThat(saved.getValue().getApiKeyHash())
+                    .isEqualTo(com.ratelimiter.admin.security.ApiKeys.hash(key))
+                    .doesNotContain(key);
+            assertThat(saved.getValue().getApiKeyPrefix()).isEqualTo(key.substring(0, 12));
+            verify(apiKeyPublisher).publish();
+        }
+
+        @Test
+        @DisplayName("rotating a key replaces its hash, returns the new key once and republishes")
+        void rotateReplacesKey() {
+            String oldHash = tenants.findById(ACME_TENANT_ID).orElseThrow().getApiKeyHash();
+
+            TenantDto rotated = tenantService.rotateApiKey(ACME_TENANT_ID);
+
+            org.mockito.ArgumentCaptor<Tenant> saved = org.mockito.ArgumentCaptor.forClass(Tenant.class);
+            verify(tenants).save(saved.capture());
+            assertThat(saved.getValue().getApiKeyHash())
+                    .isNotEqualTo(oldHash)
+                    .isEqualTo(com.ratelimiter.admin.security.ApiKeys.hash(rotated.getApiKey()));
+            verify(apiKeyPublisher).publish();
         }
 
         @Test
@@ -230,6 +252,6 @@ class TenantScopedServicesTest {
 
         TenantDto dto = tenantService.getTenant(ACME_TENANT_ID);
 
-        assertThat(dto.getApiKey()).isEqualTo("api_****").doesNotContain("acme_123");
+        assertThat(dto.getApiKey()).isEqualTo("api_key_acme****").doesNotContain("_123");
     }
 }

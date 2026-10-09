@@ -35,6 +35,12 @@ public class TenantController {
         return ResponseEntity.ok(tenantService.updateTenant(id, dto));
     }
 
+    /** Issues a new API key; the response holds it in full, this once. */
+    @PostMapping("/{id}/api-key")
+    public ResponseEntity<TenantDto> rotateApiKey(@PathVariable Long id) {
+        return ResponseEntity.ok(tenantService.rotateApiKey(id));
+    }
+
     @DeleteMapping("/{id}")
     public ResponseEntity<Void> deleteTenant(@PathVariable Long id) {
         tenantService.deleteTenant(id);

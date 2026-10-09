@@ -20,7 +20,7 @@ under hers: blocked requests in red, every figure read from the gateway's real t
 | **Exact across instances** | The same test through nginx in front of **three gateway replicas** sharing one Redis: **0 of 50 off.** |
 | **Throughput** | **~4,700 req/s** through the full gateway path, p50 3.4 ms at concurrency 16, on one laptop (i5-13420H) that also runs the load generator, upstream and Redis. |
 | **Profiled and tuned** | Java Flight Recorder showed each JWT verified six times per request; verifying once cut its CPU share from 23% to 10% and raised throughput 8% in a controlled A/B test. |
-| **Tested** | **109 tests**, including concurrency tests broken on purpose to confirm they fail. |
+| **Tested** | **116 tests**, including concurrency tests broken on purpose to confirm they fail. |
 
 ---
 
@@ -113,6 +113,11 @@ key's TTL to a full refill so an idle bucket cannot reset to full early.
   rules. The live traffic stream only delivers the subscriber's own tenant's events.
 - **Refresh tokens.** Sent as an `HttpOnly; SameSite=Strict` cookie, never in a URL, and
   rotated on every use. Replaying a spent token revokes every outstanding token for that user.
+- **API keys.** Server-to-server clients can send `X-API-Key` instead of a token. Only a
+  SHA-256 hash of each key is stored; the full key is shown once, when the tenant is created
+  or the key rotated, and rotating or deactivating a tenant stops the old key at once. A key
+  acts as its tenant with `ROLE_API_CLIENT`: it is rate limited like a user, reaches the API
+  but never the admin endpoints, and is not forwarded to upstream services.
 - **Registration** requires the tenant's registration code, so nobody can join a tenant —
   and inherit its rate-limit tier — uninvited.
 - **Login** is limited per IP at the gateway and per account in the auth service
@@ -239,6 +244,9 @@ done | sort | uniq -c
 
 # Get a new access token. The refresh token rotates; the old one is now dead.
 curl -b cookies.txt -c cookies.txt -X POST http://localhost:8080/api/auth/refresh
+
+# Or call as a server-to-server client with beta-inc's demo API key.
+curl http://localhost:8080/api/demo/ping -H "X-API-Key: api_key_beta_456"
 ```
 
 To register, supply the tenant's UUID and registration code — for the demo, acme-corp is
@@ -311,7 +319,7 @@ gateways behind nginx and runs an [end-to-end smoke test](.github/scripts/smoke-
 exactly in Prometheus, traces crossing services in Zipkin) and the load test's accuracy
 scenarios, which fail the build if any user is admitted the wrong amount.
 
-109 tests across `common`, `gateway-service`, `admin-service` and `auth-service`:
+116 tests across `common`, `gateway-service`, `admin-service` and `auth-service`:
 
 - **Limiters against a real Redis** — exact limits, window sliding, refill at the configured
   rate, capacity caps, and 300 concurrent requests in a single frozen millisecond admitting
@@ -319,6 +327,10 @@ scenarios, which fail the build if any user is admitted the wrong amount.
 - **Request costs** — a costly request uses its full cost from either algorithm, one that
   does not fit is refused without using anything, and the longest configured path prefix
   sets the cost.
+- **API keys** — a published key acts as its tenant with the API-client role and is not
+  forwarded; an unknown key is refused; a token takes precedence over a key; keys are
+  stored only as SHA-256 hashes (checked against an independently computed value), shown
+  once, and rotation replaces the stored hash.
 - **Several instances** — gateways whose clocks disagree over-admit when each passes its
   own time; on Redis's clock, three instances admit exactly the limit between them.
 - **Failure handling** — both limiters deny when Redis is unreachable. CI also runs a
