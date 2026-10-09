@@ -61,11 +61,17 @@ public class TokenBucketRateLimiter {
      *                        a per-window limit must be converted before it gets here.
      * @param ttlMs           how long an idle bucket is kept.
      */
+    public Mono<RateLimitResult> checkLimit(String key, int capacity, double refillPerSecond, long ttlMs) {
+        return checkLimit(key, capacity, refillPerSecond, ttlMs, 1);
+    }
+
+    /** @param cost tokens this request takes; admitted only if the bucket holds all of them */
     public Mono<RateLimitResult> checkLimit(
             String key,
             int capacity,
             double refillPerSecond,
-            long ttlMs) {
+            long ttlMs,
+            int cost) {
 
         String redisKey = "rl:tb:" + key;
         long requestedNow = clock != null ? clock.millis() : 0;  // 0 = Redis TIME
@@ -82,7 +88,8 @@ public class TokenBucketRateLimiter {
                         String.valueOf(capacity),
                         // Locale.ROOT: a comma decimal separator would not parse in Lua
                         String.format(java.util.Locale.ROOT, "%.6f", refillPerSecond),
-                        String.valueOf(ttlMs)
+                        String.valueOf(ttlMs),
+                        String.valueOf(cost)
                 )
         )
         .next()

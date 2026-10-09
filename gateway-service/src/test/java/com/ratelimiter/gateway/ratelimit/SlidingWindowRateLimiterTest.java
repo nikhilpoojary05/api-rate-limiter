@@ -129,4 +129,28 @@ class SlidingWindowRateLimiterTest {
                         attempts, TestRedis.description())
                 .isEqualTo(limit);
     }
+
+    @Test
+    @DisplayName("a request with a cost uses that many units of the limit")
+    void costUsesUnits() {
+        RateLimitResult first = limiter.checkLimit(key, 10, 60_000, 5).block(Duration.ofSeconds(5));
+        assertThat(first.allowed()).isTrue();
+        assertThat(first.remaining()).isEqualTo(5);
+
+        RateLimitResult second = limiter.checkLimit(key, 10, 60_000, 5).block(Duration.ofSeconds(5));
+        assertThat(second.allowed()).isTrue();
+        assertThat(second.remaining()).isZero();
+        assertThat(check(10, 60_000).allowed()).isFalse();
+    }
+
+    @Test
+    @DisplayName("a request whose cost does not fit is refused and uses nothing")
+    void costThatDoesNotFitUsesNothing() {
+        limiter.checkLimit(key, 10, 60_000, 8).block(Duration.ofSeconds(5));
+
+        assertThat(limiter.checkLimit(key, 10, 60_000, 5).block(Duration.ofSeconds(5)).allowed()).isFalse();
+        // The refused request recorded nothing, so the two remaining units are still there.
+        assertThat(limiter.checkLimit(key, 10, 60_000, 2).block(Duration.ofSeconds(5)).allowed()).isTrue();
+        assertThat(check(10, 60_000).allowed()).isFalse();
+    }
 }

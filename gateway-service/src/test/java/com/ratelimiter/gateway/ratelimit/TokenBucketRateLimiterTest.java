@@ -127,4 +127,24 @@ class TokenBucketRateLimiterTest {
                         attempts, TestRedis.description())
                 .isEqualTo(capacity);
     }
+
+    @Test
+    @DisplayName("a request with a cost takes that many tokens")
+    void costTakesTokens() {
+        RateLimitResult result = limiter.checkLimit(key, 10, 1.0, 60_000, 4).block(Duration.ofSeconds(5));
+
+        assertThat(result.allowed()).isTrue();
+        assertThat(result.remaining()).isEqualTo(6);
+    }
+
+    @Test
+    @DisplayName("a request costing more tokens than the bucket holds is refused and takes none")
+    void costThatDoesNotFitTakesNothing() {
+        limiter.checkLimit(key, 10, 1.0, 60_000, 7).block(Duration.ofSeconds(5));
+
+        assertThat(limiter.checkLimit(key, 10, 1.0, 60_000, 5).block(Duration.ofSeconds(5)).allowed()).isFalse();
+        RateLimitResult rest = limiter.checkLimit(key, 10, 1.0, 60_000, 3).block(Duration.ofSeconds(5));
+        assertThat(rest.allowed()).isTrue();
+        assertThat(rest.remaining()).isZero();
+    }
 }

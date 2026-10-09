@@ -138,10 +138,16 @@ public class RateLimiterService {
         );
     }
 
+    public Mono<RateLimitResult> isAllowed(String tenantId, String userId, String tier) {
+        return isAllowed(tenantId, userId, tier, 1);
+    }
+
+    /** @param cost units of the caller's limit this request uses (see EndpointCosts) */
     public Mono<RateLimitResult> isAllowed(
             String tenantId,
             String userId,
-            String tier) {
+            String tier,
+            int cost) {
 
         RateLimitRule rule =
                 ruleCache.get(tenantId + ":" + tier);
@@ -158,7 +164,8 @@ public class RateLimiterService {
             return slidingWindowRateLimiter.checkLimit(
                     key,
                     defaultRequestLimit,
-                    defaultWindowMs
+                    defaultWindowMs,
+                    cost
             );
         }
 
@@ -178,7 +185,8 @@ public class RateLimiterService {
                     key,
                     rule.getBurstCapacity(),
                     refillPerSecond,
-                    ttlMs
+                    ttlMs,
+                    cost
             );
 
         } else {
@@ -186,7 +194,8 @@ public class RateLimiterService {
             return slidingWindowRateLimiter.checkLimit(
                     key,
                     rule.getRequestLimit(),
-                    rule.getWindowMs()
+                    rule.getWindowMs(),
+                    cost
             );
         }
     }

@@ -3,6 +3,7 @@ package com.ratelimiter.gateway.filter;
 import com.fasterxml.jackson.core.JsonProcessingException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ratelimiter.gateway.exception.RateLimitExceededException;
+import com.ratelimiter.gateway.ratelimit.EndpointCosts;
 import com.ratelimiter.gateway.ratelimit.RateLimiterService;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -35,6 +36,7 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
     private final ReactiveRedisTemplate<String, String> redisTemplate;
     private final ObjectMapper objectMapper;
     private final MeterRegistry meterRegistry;
+    private final EndpointCosts endpointCosts;
 
     /** Tenant tag for the IP-limited unauthenticated paths, which carry no tenant. */
     static final String UNAUTHENTICATED = "unauthenticated";
@@ -88,7 +90,12 @@ public class RateLimitingFilter implements GlobalFilter, Ordered {
         String userId  = request.getHeaders().getFirst("X-User-Id");
         String tier    = request.getHeaders().getFirst("X-User-Tier");
 
-        return rateLimiterService.isAllowed(tenantId, userId, tier)
+        int cost = endpointCosts.costOf(path);
+        if (cost > 1) {
+            exchange.getResponse().getHeaders().set("X-RateLimit-Cost", String.valueOf(cost));
+        }
+
+        return rateLimiterService.isAllowed(tenantId, userId, tier, cost)
                 .flatMap(result -> {
                     long resetMs    = result.resetMs();
                     long retryAfter = retryAfterSeconds(resetMs);

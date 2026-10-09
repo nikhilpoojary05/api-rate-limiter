@@ -2,6 +2,7 @@ package com.ratelimiter.gateway.filter;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.ratelimiter.gateway.model.RateLimitResult;
+import com.ratelimiter.gateway.ratelimit.EndpointCosts;
 import com.ratelimiter.gateway.ratelimit.RateLimiterService;
 import io.micrometer.core.instrument.Meter;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
@@ -17,9 +18,12 @@ import java.time.Duration;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.RETURNS_DEEP_STUBS;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /** The metrics behind the Grafana dashboard: what gets counted, and under which tags. */
@@ -29,8 +33,9 @@ class RateLimitingFilterMetricsTest {
 
     private final RateLimiterService limiter = mock(RateLimiterService.class);
     private final SimpleMeterRegistry registry = new SimpleMeterRegistry();
+    private final EndpointCosts costs = new EndpointCosts();
     private final RateLimitingFilter filter = new RateLimitingFilter(
-            limiter, mock(ReactiveRedisTemplate.class, RETURNS_DEEP_STUBS), new ObjectMapper(), registry);
+            limiter, mock(ReactiveRedisTemplate.class, RETURNS_DEEP_STUBS), new ObjectMapper(), registry, costs);
 
     private static MockServerWebExchange tenantRequest() {
         return MockServerWebExchange.from(MockServerHttpRequest.get("/api/demo/ping")
@@ -55,7 +60,7 @@ class RateLimitingFilterMetricsTest {
     @Test
     @DisplayName("an admitted request is counted and timed under its tenant")
     void countsAllowed() {
-        when(limiter.isAllowed(anyString(), anyString(), anyString())).thenReturn(Mono.just(result(true)));
+        when(limiter.isAllowed(anyString(), anyString(), anyString(), anyInt())).thenReturn(Mono.just(result(true)));
 
         run(tenantRequest());
 
@@ -67,7 +72,7 @@ class RateLimitingFilterMetricsTest {
     @Test
     @DisplayName("a rate-limited request is counted as blocked")
     void countsBlocked() {
-        when(limiter.isAllowed(anyString(), anyString(), anyString())).thenReturn(Mono.just(result(false)));
+        when(limiter.isAllowed(anyString(), anyString(), anyString(), anyInt())).thenReturn(Mono.just(result(false)));
 
         run(tenantRequest());
 
@@ -88,7 +93,7 @@ class RateLimitingFilterMetricsTest {
     @Test
     @DisplayName("metrics are tagged by tenant and outcome only, never by user")
     void noPerUserSeries() {
-        when(limiter.isAllowed(anyString(), anyString(), anyString())).thenReturn(Mono.just(result(true)));
+        when(limiter.isAllowed(anyString(), anyString(), anyString(), anyInt())).thenReturn(Mono.just(result(true)));
 
         run(tenantRequest());
 
@@ -99,5 +104,19 @@ class RateLimitingFilterMetricsTest {
                     .contains("tenant", "outcome")
                     .isSubsetOf("tenant", "outcome", "le");
         }
+    }
+
+    @Test
+    @DisplayName("an expensive path is charged its configured cost and says so")
+    void chargesConfiguredCost() {
+        costs.setCosts(java.util.Map.of("/api/demo/slow", 5));
+        when(limiter.isAllowed(anyString(), anyString(), anyString(), anyInt())).thenReturn(Mono.just(result(true)));
+        MockServerWebExchange exchange = MockServerWebExchange.from(MockServerHttpRequest.get("/api/demo/slow")
+                .header("X-Tenant-Id", "acme-corp").header("X-User-Id", "42").header("X-User-Tier", "TIER_A"));
+
+        run(exchange);
+
+        verify(limiter).isAllowed(eq("acme-corp"), eq("42"), eq("TIER_A"), eq(5));
+        assertThat(exchange.getResponse().getHeaders().getFirst("X-RateLimit-Cost")).isEqualTo("5");
     }
 }

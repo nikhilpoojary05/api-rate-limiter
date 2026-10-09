@@ -7,6 +7,8 @@
 --           never counted. This used to come from math.random, which made correctness
 --           depend on how the Redis version seeds its generator and still left a small
 --           chance of collision.
+-- ARGV[5] = cost of this request in units of the limit (default 1). A request is
+--           admitted only if all of its cost fits; otherwise nothing is recorded.
 local key = KEYS[1]
 -- One clock for every gateway instance. Each instance used to pass its own time, so
 -- on separate servers clock skew broke the limit: an instance running ahead trimmed
@@ -19,13 +21,16 @@ if now == nil or now <= 0 then
 end
 local window = tonumber(ARGV[2])
 local limit = tonumber(ARGV[3])
+local cost = tonumber(ARGV[5]) or 1
 local clearBefore = now - window
 redis.call('ZREMRANGEBYSCORE', key, 0, clearBefore)
 local count = redis.call('ZCARD', key)
-if count < limit then
-  redis.call('ZADD', key, now, tostring(now) .. '-' .. ARGV[4])
+if count + cost <= limit then
+  for i = 1, cost do
+    redis.call('ZADD', key, now, tostring(now) .. '-' .. ARGV[4] .. '-' .. i)
+  end
   redis.call('PEXPIRE', key, window)
-  return {1, limit - count - 1, now}
+  return {1, limit - count - cost, now}
 else
   return {0, 0, now}
 end

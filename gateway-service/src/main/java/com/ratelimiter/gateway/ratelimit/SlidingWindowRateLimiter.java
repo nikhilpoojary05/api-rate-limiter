@@ -57,10 +57,16 @@ public class SlidingWindowRateLimiter {
         this.clock = clock;
     }
 
+    public Mono<RateLimitResult> checkLimit(String key, int limit, long windowMs) {
+        return checkLimit(key, limit, windowMs, 1);
+    }
+
+    /** @param cost units of the limit this request uses; admitted only if all of it fits */
     public Mono<RateLimitResult> checkLimit(
             String key,
             int limit,
-            long windowMs) {
+            long windowMs,
+            int cost) {
 
         String redisKey = "rl:sw:" + key;
         long requestedNow = clock != null ? clock.millis() : 0;  // 0 = Redis TIME
@@ -72,7 +78,8 @@ public class SlidingWindowRateLimiter {
                         String.valueOf(requestedNow),
                         String.valueOf(windowMs),
                         String.valueOf(limit),
-                        UUID.randomUUID().toString()
+                        UUID.randomUUID().toString(),
+                        String.valueOf(cost)
                 )
         )
         .next()

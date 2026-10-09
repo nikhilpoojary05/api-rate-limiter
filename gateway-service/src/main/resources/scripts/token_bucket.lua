@@ -4,6 +4,8 @@
 -- ARGV[3] = refill rate in tokens per SECOND (may be fractional)
 -- ARGV[4] = key TTL in ms. Must cover the time to refill an empty bucket, otherwise
 --           an idle bucket expires and the caller silently gets a full one back.
+-- ARGV[5] = cost of this request in tokens (default 1). A request is admitted only if
+--           the bucket holds all of it; otherwise no tokens are taken.
 local key = KEYS[1]
 -- One clock for every gateway instance. Each instance used to pass its own time, so
 -- on separate servers clock skew broke the limit: an instance running ahead trimmed
@@ -17,15 +19,16 @@ end
 local capacity = tonumber(ARGV[2])
 local refill_rate = tonumber(ARGV[3])
 local ttl = tonumber(ARGV[4])
+local cost = tonumber(ARGV[5]) or 1
 local bucket = redis.call('HMGET', key, 'tokens', 'last_refill')
 local tokens = tonumber(bucket[1]) or capacity
 local last_refill = tonumber(bucket[2]) or now
 local elapsed = (now - last_refill) / 1000.0
 local new_tokens = math.min(capacity, tokens + elapsed * refill_rate)
-if new_tokens >= 1 then
-  redis.call('HMSET', key, 'tokens', new_tokens - 1, 'last_refill', now)
+if new_tokens >= cost then
+  redis.call('HMSET', key, 'tokens', new_tokens - cost, 'last_refill', now)
   redis.call('PEXPIRE', key, ttl)
-  return {1, math.floor(new_tokens - 1), now}
+  return {1, math.floor(new_tokens - cost), now}
 else
   redis.call('HMSET', key, 'tokens', new_tokens, 'last_refill', now)
   redis.call('PEXPIRE', key, ttl)

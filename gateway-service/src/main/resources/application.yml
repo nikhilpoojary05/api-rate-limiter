@@ -30,6 +30,13 @@ spring:
       timeout: ${REDIS_TIMEOUT:1s}
       connect-timeout: ${REDIS_CONNECT_TIMEOUT:1s}
 
+ratelimit:
+  # Requests that use more than one unit of the caller's limit, by path prefix; the
+  # longest match wins and everything else costs 1. /api/demo/slow holds a thread for
+  # half a second, so it is charged as five ordinary requests.
+  costs:
+    "[/api/demo/slow]": 5
+
 security:
   hsts:
     # Enable together with TLS termination. Turning this on over plain http locks

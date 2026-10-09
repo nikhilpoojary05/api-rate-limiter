@@ -60,6 +60,17 @@ check "acme-corp admits exactly its limit" 100 "$allowed"
 check "requests over the limit get 429" 6 "$blocked"
 check "another tenant is unaffected" 200 "$(status "$G/api/demo/ping" -H "Authorization: Bearer $JANE")"
 
+# /api/demo/slow is configured to cost 5 units of the limit; a ping costs 1.
+header() { # header name, then curl arguments
+  local name="$1"; shift
+  curl -s -o /dev/null -D - "$@" | tr -d '\r' | awk -F': ' -v h="$name" 'tolower($1) == h {print $2}'
+}
+before="$(header x-ratelimit-remaining "$G/api/demo/ping" -H "Authorization: Bearer $JANE")"
+after="$(header x-ratelimit-remaining "$G/api/demo/slow" -H "Authorization: Bearer $JANE")"
+check "an expensive endpoint uses 5 units of the limit" 5 "$((before - after))"
+check "the cost is reported to the client" 5 \
+  "$(header x-ratelimit-cost "$G/api/demo/slow" -H "Authorization: Bearer $JANE")"
+
 check "regular user is refused on the admin API" 403 "$(status "$G/api/admin/rules" -H "Authorization: Bearer $JANE")"
 check "admin can use the admin API" 200 "$(status "$G/api/admin/rules" -H "Authorization: Bearer $ADMIN")"
 

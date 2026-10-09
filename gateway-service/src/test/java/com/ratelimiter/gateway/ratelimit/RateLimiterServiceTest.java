@@ -44,7 +44,8 @@ class RateLimiterServiceTest {
         tokenBucket = mock(TokenBucketRateLimiter.class);
         RateLimitResult ok = new RateLimitResult(true, 1, 0);
         when(slidingWindow.checkLimit(anyString(), anyInt(), anyLong())).thenReturn(Mono.just(ok));
-        when(tokenBucket.checkLimit(anyString(), anyInt(), anyDouble(), anyLong())).thenReturn(Mono.just(ok));
+        when(slidingWindow.checkLimit(anyString(), anyInt(), anyLong(), anyInt())).thenReturn(Mono.just(ok));
+        when(tokenBucket.checkLimit(anyString(), anyInt(), anyDouble(), anyLong(), anyInt())).thenReturn(Mono.just(ok));
 
         service = new RateLimiterService(slidingWindow, tokenBucket,
                 mock(ReactiveRedisTemplate.class), new ObjectMapper());
@@ -66,7 +67,7 @@ class RateLimiterServiceTest {
     void unmatchedTenantGetsDefault() {
         service.isAllowed("unknown-tenant", "u1", "TIER_X").block();
 
-        verify(slidingWindow).checkLimit("unknown-tenant:u1", 60, 60_000L);
+        verify(slidingWindow).checkLimit("unknown-tenant:u1", 60, 60_000L, 1);
         verifyNoInteractions(tokenBucket);
     }
 
@@ -78,7 +79,7 @@ class RateLimiterServiceTest {
 
         service.isAllowed("acme-corp", "u1", "TIER_A").block();
 
-        verify(slidingWindow).checkLimit("acme-corp:u1", 60, 60_000L);
+        verify(slidingWindow).checkLimit("acme-corp:u1", 60, 60_000L, 1);
     }
 
     @Test
@@ -89,7 +90,7 @@ class RateLimiterServiceTest {
 
         service.isAllowed("acme-corp", "u1", "TIER_A").block();
 
-        verify(slidingWindow).checkLimit("acme-corp:u1", 100, 60_000L);
+        verify(slidingWindow).checkLimit("acme-corp:u1", 100, 60_000L, 1);
     }
 
     @Test
@@ -103,7 +104,7 @@ class RateLimiterServiceTest {
 
         ArgumentCaptor<Double> rate = ArgumentCaptor.forClass(Double.class);
         ArgumentCaptor<Long> ttl = ArgumentCaptor.forClass(Long.class);
-        verify(tokenBucket).checkLimit(eq("free-user-co:u1"), eq(20), rate.capture(), ttl.capture());
+        verify(tokenBucket).checkLimit(eq("free-user-co:u1"), eq(20), rate.capture(), ttl.capture(), eq(1));
 
         assertThat(rate.getValue())
                 .as("tokens per second; previously 10, sixty times too fast")

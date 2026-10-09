@@ -20,7 +20,7 @@ under hers: blocked requests in red, every figure read from the gateway's real t
 | **Exact across instances** | The same test through nginx in front of **three gateway replicas** sharing one Redis: **0 of 50 off.** |
 | **Throughput** | **~4,700 req/s** through the full gateway path, p50 3.4 ms at concurrency 16, on one laptop (i5-13420H) that also runs the load generator, upstream and Redis. |
 | **Profiled and tuned** | Java Flight Recorder showed each JWT verified six times per request; verifying once cut its CPU share from 23% to 10% and raised throughput 8% in a controlled A/B test. |
-| **Tested** | **102 tests**, including concurrency tests broken on purpose to confirm they fail. |
+| **Tested** | **109 tests**, including concurrency tests broken on purpose to confirm they fail. |
 
 ---
 
@@ -76,7 +76,11 @@ For each request the gateway:
    servers agree on the window even when their clocks drift. Run as separate commands instead, the same
    algorithm let one bursting user through up to 57% over the limit; see
    [why the limiter is a Lua script](docs/why-atomic.md).
-5. Returns `429 Too Many Requests` with `Retry-After`, or proxies the request.
+5. **Charges the request's cost.** Most requests use one unit of the limit; an expensive
+   endpoint can be configured to use more (`/api/demo/slow` costs 5), so a tenant allowed
+   100 per minute gets 100 cheap requests or 20 slow ones. A request is admitted only if
+   its whole cost fits, and clients see it in `X-RateLimit-Cost`.
+6. Returns `429 Too Many Requests` with `Retry-After`, or proxies the request.
 
 **Sliding window** — a sorted set per `tenant:user`, scored by timestamp. Each entry's member
 is `timestamp-uuid`; with a timestamp alone, two requests in the same millisecond would
@@ -290,6 +294,7 @@ Gateway properties:
 | `ratelimit.default.request-limit` / `window-ms` | 60 / 60000 | Applied when no rule matches |
 | `ratelimit.public.request-limit` / `window-ms` | 20 / 60000 | Per-IP limit on `/api/auth/**` |
 | `ratelimit.fail-open` | `false` | Allow requests when Redis is down |
+| `ratelimit.costs` | `/api/demo/slow: 5` | Units of the limit a request uses, by path prefix; longest match wins, default 1 |
 
 ---
 
@@ -306,11 +311,14 @@ gateways behind nginx and runs an [end-to-end smoke test](.github/scripts/smoke-
 exactly in Prometheus, traces crossing services in Zipkin) and the load test's accuracy
 scenarios, which fail the build if any user is admitted the wrong amount.
 
-102 tests across `common`, `gateway-service`, `admin-service` and `auth-service`:
+109 tests across `common`, `gateway-service`, `admin-service` and `auth-service`:
 
 - **Limiters against a real Redis** — exact limits, window sliding, refill at the configured
   rate, capacity caps, and 300 concurrent requests in a single frozen millisecond admitting
   exactly the limit. Time is driven by an injectable clock, so nothing sleeps.
+- **Request costs** — a costly request uses its full cost from either algorithm, one that
+  does not fit is refused without using anything, and the longest configured path prefix
+  sets the cost.
 - **Several instances** — gateways whose clocks disagree over-admit when each passes its
   own time; on Redis's clock, three instances admit exactly the limit between them.
 - **Failure handling** — both limiters deny when Redis is unreachable. CI also runs a
